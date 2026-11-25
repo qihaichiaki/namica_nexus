@@ -141,10 +141,14 @@ export async function buildHost(options: HostOptions = {}) {
     const origin = request.headers.origin
     const devOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173']
     const devRequest = options.dev && origin !== undefined && devOrigins.includes(origin)
-    const receipt = request.method === 'GET' && ticket && Date.now() < ticket.expires &&
-      request.url === '/api/manage/host/restart-result/' + ticket.id && origin === ticket.origin
-    if (receipt) reply.header('Access-Control-Allow-Origin', ticket.origin).header('Vary', 'Origin')
-    if (!receipt && ((origin !== undefined && origin !== 'http://' + host && !devRequest) ||
+    const liveTicket = request.method === 'GET' && ticket && Date.now() < ticket.expires ? ticket : undefined
+    const receipt = liveTicket && request.url === '/api/manage/host/restart-result/' + liveTicket.id && origin === liveTicket.origin
+    if (receipt) reply.header('Access-Control-Allow-Origin', liveTicket.origin).header('Vary', 'Origin')
+    const landing = liveTicket && request.url === '/console/?restart=' + liveTicket.id &&
+      request.headers['sec-fetch-mode'] === 'navigate' && request.headers['sec-fetch-dest'] === 'document' &&
+      (origin === undefined || origin === liveTicket.origin)
+    if (landing) reply.header('Cache-Control', 'no-store')
+    if (!receipt && !landing && ((origin !== undefined && origin !== 'http://' + host && !devRequest) ||
         (request.headers['sec-fetch-site'] === 'cross-site' && !devRequest))) {
       diagnostics.record('unrecognizedOrigin')
       throw new HttpError(403, 'Unrecognized Origin.')

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { access, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { get as httpGet } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -34,6 +35,21 @@ function get(base, route, method, body, headers) {
   return fetch(base + route, {method, headers: {...(body && {'content-type': 'application/json'}), ...headers},
     body: body && JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(1500)})
 }
+// Browser navigation sends Fetch Metadata that fetch() implementations may overwrite.
+function navigation(base, path, headers = {}) {
+  return new Promise((accept, reject) => {
+    const req = httpGet(new URL(path, base), {headers: {
+      'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', ...headers,
+    }}, res => {
+      const parts = []
+      res.on('data', chunk => parts.push(chunk))
+      res.on('end', () => accept({status: res.statusCode, headers: res.headers, body: Buffer.concat(parts).toString()}))
+      res.on('error', reject)
+    })
+    req.setTimeout(1500, () => req.destroy(new Error('navigation timed out')))
+    req.on('error', reject)
+  })
+}
 async function waitStatus(base, condition = () => true) {
   for (let i = 0; i < 100; ++i) {
     try {
@@ -54,6 +70,8 @@ try {
   const env = {...process.env, NEXUS_PORT: String(initial), NEXUS_ADDRESS: '127.0.0.1', NEXUS_DATA_DIR: source}
   delete env.NEXUS_DEPLOYMENT_FILE
   serviceUrl = old
+  await mkdir(join(root, 'apps/web/dist/console'), {recursive: true})
+  for (const file of ['apps/web/dist/index.html', 'apps/web/dist/console/index.html']) await writeFile(join(root, file), '<title>Fixture</title>')
   processHost = spawn(process.execPath, [main], {env, cwd: root, windowsHide: true, stdio: 'ignore'})
   const status = await waitStatus(old)
   const {id} = await (await get(old, '/api/identities', 'POST', {name: 'Synthetic identity'})).json()
@@ -94,6 +112,16 @@ try {
   const confirm = await get(next, receipts + receipt.restartId, 'GET', undefined, {Origin: old, 'sec-fetch-site': 'cross-site'})
   assert.equal(confirm.headers.get('access-control-allow-origin'), old)
   assert.deepEqual(await confirm.json(), {status: 'ready', consoleUrl: next + '/console/', instanceId: current.instanceId})
+  const landing = '/console/?restart=' + receipt.restartId
+  const document = await navigation(next, landing)
+  assert.equal(document.status, 200, document.body)
+  assert.match(document.body, /<title>Fixture<\/title>/)
+  assert.equal(document.headers['access-control-allow-origin'], undefined)
+  for (const [path, headers] of [
+    ['/console/', {}], [landing + 'wrong', {}], [landing + '&extra=1', {}],
+    [landing, {Origin: 'https://foreign.example'}], [landing, {'sec-fetch-mode': 'cors'}],
+    [landing, {'sec-fetch-dest': 'iframe'}], ['/api/identities?restart=' + receipt.restartId, {}],
+  ]) assert.equal((await navigation(next, path, headers)).status, 403)
   assert.equal((await get(next, receipts + receipt.restartId, 'GET', undefined, {Origin: 'https://foreign.example'})).status, 403)
   assert.equal((await get(next, '/api/identities', 'GET', undefined, {Origin: old})).status, 403)
   assert.equal((await (await get(next, '/api/identities')).json())[0].id, id)
@@ -122,7 +150,6 @@ try {
     for (const dir of ['dist/apps/host/src', 'apps/web/dist/console']) await mkdir(join(root, dir), {recursive: true})
     await writeFile(join(root, 'dist/windows-node.txt'), process.execPath)
     await writeFile(join(root, 'dist/apps/host/src/main.js'), 'import(' + JSON.stringify(pathToFileURL(main).href) + ').catch(() => { process.exitCode = 1 })')
-    for (const path of ['apps/web/dist/index.html', 'apps/web/dist/console/index.html']) await writeFile(join(root, path), '<title>Fixture</title>')
     const testMain = join(root, 'TestMain.cs'), launcher = join(root, 'test-launcher.exe'), result = join(root, 'launcher-result')
     await writeFile(testMain, 'using System; using System.IO; class TestMain { static int Main() { Action<string> output = s => File.WriteAllText(Environment.GetEnvironmentVariable("NEXUS_TEST_OUTPUT"), s); return Launcher.Run(output, output); } }')
     compileLauncher(launcher, {entry: 'TestMain', sources: [testMain]})
