@@ -4,7 +4,7 @@
 
 ## 接手位置
 
-V0.1 已验收，当前没有已派发的 V0.2 开发任务。下一步由 Architect 与负责人讨论[换 Runtime 后应延续哪些内容](open-questions.md)，结论将决定第二个真实 Runtime 的验证范围。核对新提交后继续这项讨论。
+V0.1 已验收。负责人已确认先改善 Windows 本机启动与关停体验。当前工作是实现并验收 [TASK-001](../tasks/TASK-001-windows-launch-and-shutdown.md)，通过后更新实际架构和本基线。第二种 Runtime 的[连续性问题](open-questions.md)仍待讨论。
 
 ## 工程如何走到这里
 

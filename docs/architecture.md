@@ -112,3 +112,7 @@ Host 校验精确的 Host、Origin 和浏览器跨站请求标记；生产仅监
 `agent-core` 的事件已经隔离原生 RPC。当前生产工厂只分派 Codex，SQLite 只初始化一条 Runtime 配置，API 可编辑既有配置。接口声明的 resume、stream、cancel、approvals 四个能力标志尚未驱动 Host 调度或界面行为。现有注入工厂验证了同一调用方能用测试替身；能否接纳不同恢复或审批语义，需要第二个真实产品验证。
 
 长期由 Host 构建包含人格、记忆和策略的上下文；当前发送给 Adapter 的业务上下文只有会话指令、已有线程 ID 和本轮输入等。关系、记忆检索、事件调度、远端身份认证和跨 Agent 通信的目标见[愿景](vision.md)。落地顺序与尚待确认的决定见[路线图](roadmap.md)及[待讨论事项](architect/open-questions.md)。
+
+## 已确认的下一项变更
+
+Windows 本地启动入口将负责托盘与打开现有 Web Client，Host 将统一处理托盘和管理页的关停请求。当前实现仍从终端启动。决定及验收范围见 [ADR 004](adr/004-windows-launch-and-shutdown.md) 和 [TASK-001](tasks/TASK-001-windows-launch-and-shutdown.md)。
