@@ -6,19 +6,22 @@ V0.1.0 是面向 Windows 的个人 AI Agent 宿主。在浏览器中创建多个
 
 ## 安装与运行
 
-准备 Node.js 22.18 或更高的受支持版本、npm，以及可执行的官方 Codex CLI。用 `codex --version` 确认安装，然后从项目根目录执行以下命令。
+准备 Node.js 22.18 或更高的受支持版本、npm，以及可执行的官方 Codex CLI。Windows 构建启动器使用系统 .NET Framework 的 C# 编译器。用 `codex --version` 确认 Codex 安装，然后从项目根目录执行以下命令。
 
 ```powershell
 npm ci
 npm run build
-npm start
 ```
 
-打开 [本地 Web Client](http://127.0.0.1:8080)。保持 Host 终端运行，按 Ctrl+C 关闭。SQLite 在部分 Node.js 版本中会输出实验性功能提示。
+**日常启动**　在 Windows 资源管理器中双击项目根目录的 `Namica Nexus.exe`。启动器在后台运行 Host，就绪后用默认浏览器打开 [Nexus Console](http://127.0.0.1:8080/console/)。再次双击会进入同一实例，已有任务和会话继续运行。默认浏览器可能打开新的标签页。Console 中的「打开 Client」进入[聊天与身份管理](http://127.0.0.1:8080/)。
 
-1. 打开**设置 → Runtime 配置**。如需代理，在**本地代理地址**填写自己的 HTTP(S) 代理（如 `http://127.0.0.1:7890`）并保存。如需指定二进制，使用 `Get-Command codex.exe` 定位原生可执行文件。
-2. 首次使用时，在项目根目录的另一终端运行 `npm run codex:login`，按官方页面提示登录 Nexus 专用配置。回到设置页点击**检测可用性**。检测覆盖进程、协议和账户，模型连通性通过发消息验证。
-3. 打开**身份**，创建身份，填写名称和基础人格。工作目录留空会沿用 Runtime 的独立工作目录，或填写自己的绝对路径。
+**停止服务**　在 Console 选择「停止服务」，查看活动任务数后确认。正在执行的任务会中断，已收到的回复和历史保留。关闭网页后 Host 继续运行。服务停止后可再次双击启动。
+
+命令行仍可运行 `npm start`，从终端查看启动诊断，用 Ctrl+C 或 Console 停止服务。若端口已由其他服务使用，启动器会报告冲突。可改用独立端口并设置对应数据目录，见下文。SQLite 在部分 Node.js 版本中会输出实验性功能提示。
+
+1. 打开 **Console → Runtime 配置**。如需代理，在**本地代理地址**填写自己的 HTTP(S) 代理（如 `http://127.0.0.1:7890`）并保存。如需指定二进制，使用 `Get-Command codex.exe` 定位原生可执行文件。
+2. 首次使用时，在项目根目录的终端运行 `npm run codex:login`，按官方提示登录 Nexus 专用配置。回到 Console 点击**检测可用性**。检测覆盖进程、协议和账户，模型连通性通过发消息验证。
+3. 在 **Client → 身份** 创建身份，填写名称和基础人格。工作目录留空会沿用 Runtime 的独立工作目录，或填写自己的绝对路径。
 4. 进入对话、新建会话并发送消息。试试在工作目录放一个小程序，让 Agent 解释它的输出。在消息旁查看工具及审批信息；核对操作内容后选择允许一次或拒绝。执行中可以停止任务。
 5. 刷新或关闭页面，再次访问即可继续查看。修改名称、描述或人格后，新会话使用更新的人格版本。现有会话保留创建时的指令与工作目录。
 
@@ -26,12 +29,13 @@ npm start
 
 | 命令 | 用途 |
 | --- | --- |
-| `npm run dev` | 同时启动 Host 和支持热更新的 Web Client，浏览器打开 [开发页面](http://127.0.0.1:5173) |
+| `npm run dev` | 同时启动 Host 与 Vite，可打开开发版 [Client](http://127.0.0.1:5173/) 和 [Console](http://127.0.0.1:5173/console/) |
 | `npm run dev:host` | 单独开发 Host |
 | `npm run codex:login -- status` | 查询 Nexus 专用目录的登录状态；设备码登录使用 `npm run codex:login -- --device-auth` |
 | `npm run check` | 全工程 TypeScript 检查 |
 | `npm test` | 自动化回归，使用临时目录与受控输入 |
-| `npm run build` | 类型检查、编译 Host 并构建静态 Web Client |
+| `npm run test:launcher` | 在 Windows 临时目录验证并发启动、实例复用、端口冲突和失败提示 |
+| `npm run build` | 类型检查、编译 Host、构建两个 Web 入口，在 Windows 上生成双击启动器 |
 | `npm start` | 运行已构建的 Host，同时提供页面和 API |
 | `npm run test:live` | 构建后执行真实 Codex 验收，使用当前账户、临时独立目录和随机端口 |
 
@@ -51,7 +55,7 @@ npm start
 
 升级旧版时，可在关闭旧 Host 后将 `%LOCALAPPDATA%\NamicaNexus` 的内容复制到一个空的 `data/` 中再启动。原库可留作备份；已配置的自定义绝对工作路径会保留，旧版生成的默认工作路径会随新数据目录解析。
 
-设置页支持日志等级、执行超时、默认 Runtime，以及 Codex 的启用状态、可执行文件、默认工作目录和可选模型。日志等级立即生效；超时和模型在后续任务使用，默认 Runtime 用于创建身份。可执行文件和目录路径允许包含空格与中文。
+Console 支持日志等级、执行超时、默认 Runtime，以及 Codex 的启用状态、可执行文件、默认工作目录和可选模型。日志等级立即生效。超时和模型在后续任务使用，默认 Runtime 用于创建身份。可执行文件和目录路径允许包含空格与中文。
 
 端口和数据目录通过启动环境指定。例如在单独的 PowerShell 中运行以下命令即可启动一个独立实例。
 

@@ -6,10 +6,23 @@
 
 - 安装与构建后，双击 Namica Nexus 入口即可在后台启动 Host。就绪后用默认浏览器打开该实例的 `/console/`。正在启动或已经运行时复用目标实例，保留任务、会话和配置。网页标签页由默认浏览器管理。保留终端启动和开发模式。
 - Console 复用现有 Host/Runtime 设置和状态，提供「打开 Client」和「停止服务」。Client 位于 `/`，保留身份、人格、聊天、审批和取消。关任一网页只断开连接。这一版全部监听回环地址，托盘、远程访问与新的管理能力留待以后讨论。
-- 一个 Host 独占 Store 并持有 Tasks。管理路由放在 `/api/manage` 下：`GET /host/status` 返回现有 HostStatus 加 `service: "namica-nexus"` 和 `activeTurns: number`，配置与 Runtime 检测沿用现有相对路径。显式 `POST /api/manage/host/shutdown` 返回 202 后关闭。Client 使用现有业务路由与 `GET /api/runtime-options`（数组，每项仅 id、type、enabled、isDefault）。CLI 登录辅助命令随管理路由更新。Console 可通过本机请求刷新状态。
+- 一个 Host 独占 Store 并持有 Tasks。管理路由使用 `/api/manage` 前缀。状态返回服务标识 `namica-nexus`、本次启动的 `instanceId` 和 `activeTurns` 活动任务数。Console 向 `POST /api/manage/host/shutdown` 提交确认时的实例标识和任务数。任一发生变化，Host 返回 409 以便重新确认。202 表示已受理。Client 通过 `GET /api/runtime-options` 获取 id、type、enabled、isDefault。CLI 登录辅助命令使用管理路由。
 - 停止前显示当前活动任务数并允许取消。Host 受理后停止接纳新任务，保留部分回复与线程映射，活动 Turn 和未完成工具收为 interrupted，清空旧审批，释放端口、子进程与数据库。页面区分已受理与意外失联。
 - 实例识别核对服务标识、端口与数据目录。处理双击并发、端口被占、路径含空格/中文与启动失败。失败时提供可读原因，不终止无关进程。保留 Host、Origin 及跨站校验。
 
-## 验收
+## 验收记录
 
-验证冷启动及复用、关闭网页后继续运行、空闲与执行中关停、随后重启可读历史、双击竞争和端口冲突。通过临时工作区及独立回环端口验证，不操作负责人桌面。交回范围、提交、测试、构建、未实测的交互及已知限制。
+2026-11-25，Architect 验收通过。集成源码为 `cdea8d0`，三个模块均由 Codex Developer（GPT-6.2-Sol，high）实现并提交。
+
+| 模块 | 提交 | 验收重点 |
+| --- | --- | --- |
+| Host 与协议 | `abedc35` | 管理与业务路由、关停受理、Runtime 子进程释放、中断落盘和重启恢复 |
+| Web Console 与 Client | `f57cbde`、`2c79956` | 独立页面与共享类型、关停确认、实例更换、意外掉线和自动重连 |
+| Windows 启动器 | `2323958` | 隐藏 Host 控制台、确认服务就绪、双击复用、端口冲突和 Node 定位 |
+
+- 集成版本通过 `npm run build`、`npm test`（26 项）和 `npm run test:launcher`（7 组）。产物包括两个 HTML 入口及根目录 Windows GUI 子系统 EXE。
+- 在含中文与空格的临时目录中，清空启动器的 Node 搜索路径，以相同的原生启动逻辑运行生产 Host。并发及重复启动取得同一实例标识和 Console 地址。空闲关停后在同一端口重启，实例标识更新，原身份仍可读取。浏览器唤起与错误弹框在测试中以文件回执替代。
+- 隔离 Chrome 与真实 Host 使用合成 Adapter 产生等待审批的任务。关闭两个页面后任务继续，取消关停后审批仍可用。确认关停后 Host 正常退出，重启可读部分回复、线程映射及已中断的任务和工具，旧审批已清除。独立断线显示连接中断。另检查了桌面宽度与 390px 窄屏。Developer 的浏览器测试也覆盖了确认时任务数或实例改变，以及快速重启。
+- 仓外使用真实 Codex CLI `0.171.0-alpha.13.2` 验证可用性检测的取消，以及以回环合成模型跨进程恢复同一原生线程。本次没有使用云模型账户或操作用户桌面。
+
+**调度经验**　Web Developer 的浏览器回归发现旧轮询响应会遮蔽新实例的关停回执，并在原会话完成修复。以后遇到管理请求与状态轮询并行的页面，继续将乱序回包和快速重启列入该模块验收。

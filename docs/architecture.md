@@ -4,7 +4,10 @@ V0.1 部署在个人 Windows PC 上。一个 Host 进程持有本地业务数据
 
 ```mermaid
 flowchart LR
-    Web["React Web Client"] <-->|HTTP + SSE| Host["Fastify Host"]
+    Launcher["Windows 启动器"] -->|启动或复用| Host["Fastify Host"]
+    Launcher -->|打开默认浏览器| Console["Nexus Console"]
+    Console <-->|本机管理 API| Host
+    Web["Nexus Client"] <-->|业务 API 和 SSE| Host
     Host <-->|SQL| DB[("SQLite")]
     Host -->|AgentAdapter| Adapter["Codex Adapter"]
     Adapter <-->|JSON-RPC over stdio| Codex["codex app-server"]
@@ -15,7 +18,8 @@ flowchart LR
 
 | 路径 | 职责 |
 | --- | --- |
-| `apps/web/src` | 对话、身份和设置界面，订阅事件并读取会话快照。浏览器只在 localStorage 保存选择状态。 |
+| `apps/web` | React/Vite 的 Client 与 Console 两个入口。Client 管理身份和对话，订阅业务事件。Console 读取本机管理状态、配置 Runtime 并可显式请求停止 Host。 |
+| `scripts/windows` | 从源码构建 Windows 启动器，协调同一端口的启动请求，核对本机实例就绪状态并打开 Console。 |
 | `packages/protocol/src/index.ts` | Host 与 Web 共用的 HTTP 响应、快照和 SSE 通知类型。 |
 | `apps/host/src/main.ts` | 监听回环接口，接收关闭信号，启动和停止 Host。 |
 | `apps/host/src/app.ts` | 路由、Zod 输入校验、静态 Web 托管、Host 配置、Runtime 检测、SSE 发布。 |
@@ -64,14 +68,16 @@ Host 相对于启动工作目录解析 `data/`，也可由 `NEXUS_DATA_DIR` 覆�
 
 ## 接口与重连
 
-所有业务端点以 `/api` 为前缀。列表响应是 JSON 数组。校验错误为 400，资源缺失为 404，同会话并发发送、过期审批等冲突为 409。错误响应使用 `{"error":"…"}`。
+下表路径相对于 `/api`。本机管理端点集中在 `/api/manage`。两类接口共用一个 Host、Store 和 Tasks，当前都只在回环地址提供。列表响应是 JSON 数组。校验错误为 400，资源缺失为 404，同会话并发发送、过期审批等冲突为 409。错误响应使用 `{"error":"…"}`。
 
 | 方法 | 路径 | 输入或返回 |
 | --- | --- | --- |
-| GET | /host/status、/host/config | 实际监听状态、运行时长、数据目录及持久配置。 |
-| PATCH | /host/config | 日志等级、执行超时、默认 Runtime。 |
-| GET | /runtimes、/identities | Runtime 配置列表、身份列表。 |
-| PATCH、POST | /runtimes/:id、/runtimes/:id/check | 保存配置或启动真实可用性检查，返回 Runtime。 |
+| GET | /manage/host/status、/manage/host/config | 服务标识、实例状态、活动 Turn 数、运行时长、数据目录及持久配置。 |
+| PATCH | /manage/host/config | 日志等级、执行超时、默认 Runtime。 |
+| POST | /manage/host/shutdown | Console 发送用户确认时的 `instanceId` 和 `activeTurns`。两者任一变化返回 409，请求方需重新确认。202 表示 Host 已受理。本机调用方也可用空 JSON 对象显式请求关停。 |
+| GET | /manage/runtimes | 供 Console 与本机登录辅助命令读取部署配置。 |
+| PATCH、POST | /manage/runtimes/:id、/manage/runtimes/:id/check | 保存配置或启动真实可用性检查，返回 Runtime。 |
+| GET | /runtime-options、/identities | Client 的 Runtime 选项（ID、类型、启用状态、是否默认）和身份列表。 |
 | POST、PATCH | /identities、/identities/:id | 创建或更新身份，返回 Identity。 |
 | GET、POST | /sessions | 查询（可带 identityId）或用 identityId 与可选 title 创建会话。 |
 | GET | /sessions/:id | 返回 session、messages、turns、tools、approvals 组成的快照。 |
@@ -113,6 +119,6 @@ Host 校验精确的 Host、Origin 和浏览器跨站请求标记；生产仅监
 
 长期由 Host 构建包含人格、记忆和策略的上下文；当前发送给 Adapter 的业务上下文只有会话指令、已有线程 ID 和本轮输入等。关系、记忆检索、事件调度、远端身份认证和跨 Agent 通信的目标见[愿景](vision.md)。落地顺序与尚待确认的决定见[路线图](roadmap.md)及[待讨论事项](architect/open-questions.md)。
 
-## 已确认的下一项变更
+## Windows 启动和关闭
 
-Windows 本机 EXE 将启动 Host 并显示本实例的原生控制台，托盘可唤回窗口；打开 Web Client 必须由用户主动触发，Host 将统一处理托盘和管理页的关停请求。当前实现仍从终端启动。决定及验收范围见 [ADR 004](adr/004-windows-launch-and-shutdown.md) 和 [TASK-001](tasks/TASK-001-windows-launch-and-shutdown.md)。
+双击启动器启动或复用目标 Host，就绪后打开 `/console/`。聊天 Client 保留在 `/`。关闭任一网页都会保留后台任务；Console 的显式关停和命令行退出由 Host 处理，活动任务和未结束的工具记为中断。地址、数据目录与本机实例的关系及验收范围见 [ADR 004](adr/004-windows-launch-and-shutdown.md) 和 [TASK-001](tasks/TASK-001-windows-launch-and-shutdown.md)。

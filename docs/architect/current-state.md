@@ -1,10 +1,12 @@
-# V0.1.0 工程基线与首次架构审查
+# V0.1.0 工程基线与架构审查
 
-2026-11-25，Windows，`main`。被审查的**业务源码**为 `43d2c17c40c31f5bddd0920404451bb6f11e4818`。依赖由根 `package.json` 和 npm v3 锁文件统一管理，Host 与 Web 共用 TypeScript 类型，分别编译。复验使用已有依赖，Node 22.18.0、npm 10.9.3。
+2026-11-25，Windows，`main`。首次审查的业务源码为 `43d2c17`。Windows 启动器、Console 与 Client 分离后的集成基线为 `cdea8d0`。依赖由根 `package.json` 和 npm v3 锁文件统一管理，Host 与 Web 共用 TypeScript 类型，分别编译。
 
 ## 接手位置
 
-V0.1 已验收。负责人已确认先改善 Windows 本机启动与关停体验。当前工作是实现并验收 [TASK-001](../tasks/TASK-001-windows-launch-and-shutdown.md)，通过后更新实际架构和本基线。第二种 Runtime 的[连续性问题](open-questions.md)仍待讨论。
+V0.1 和 [TASK-001](../tasks/TASK-001-windows-launch-and-shutdown.md) 已验收。Windows 构建生成根目录的 `Namica Nexus.exe`。双击打开本机管理页，Console 可以停止 Host。Client 负责身份与聊天。两个入口目前均限本机，后续范围由负责人确定。第二种 Runtime 的[连续性问题](open-questions.md)仍待讨论。
+
+TASK-001 在 Node 24.22.3、npm 10.9.3 下通过生产构建、26 项自动化回归、7 组启动器场景及仓外集成验证。实际 Host 与原生启动器的并发复用、后台任务与关停恢复、无头浏览器和真实 Codex 的验证边界见[任务验收记录](../tasks/TASK-001-windows-launch-and-shutdown.md#验收记录)。
 
 ## 工程如何走到这里
 
@@ -17,7 +19,9 @@ V0.1 已验收。负责人已确认先改善 Windows 本机启动与关停体验
 
 模块、接口、生命周期及源码路径由[实际架构](../architecture.md)维护。
 
-## 证据与验证边界
+## 首次审查的证据与验证边界
+
+下表保留 `43d2c17` 的证据，使用 Node 22.18.0、npm 10.9.3。
 
 | 状态 | 检查 | 结论与适用范围 |
 | --- | --- | --- |
