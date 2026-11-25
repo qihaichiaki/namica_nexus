@@ -7,7 +7,7 @@ import { resolveCodexExecutable } from './executable.js'
 type Outcome = 'completed' | 'cancelled'
 type RequestId = string | number
 
-const loginHint = 'Nexus 专用 Codex 尚未登录。请在项目目录运行 npm run codex:login 后重新检测。'
+const loginHint = 'Nexus 专用 Codex 尚未登录。请在 Console 的 Codex 独立登录中完成授权，再检测可用性。'
 
 async function authenticated(rpc: Rpc): Promise<boolean> {
   const result = await rpc.request('account/read', { refreshToken: false })
