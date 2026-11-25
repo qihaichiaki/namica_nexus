@@ -2,15 +2,17 @@
 
 ## 1. 基础信息
 
-2026-11-25 · v0.1.0 · M0–M4 本机 MVP 验收 · Git 分支 `main`。初始实现 `905f8e5`，本机原生命令审批兼容修正 `2a34236`。Git 使用开发机已配置的作者与提交者身份。
+2026-11-25 · v0.1.0 · MVP 验收后的本地配置与隐私更新 · Git 分支 `main`。上一阶段验收报告提交为 `2e8fbb3`。Git 使用开发机已配置的作者与提交者身份。
 
 ## 2. 当前开发目标
 
-在个人 Windows PC 上从空工程打通“浏览器 → Host → 本机 Codex → 实际回复与工具结果”的闭环，并验证身份、会话和先前任务的状态可以恢复。
+将默认数据移入项目目录，提供可保存的代理设置，实现 Nexus 对话与日常 Codex 最近列表隔离，并保持原生续聊。
 
 ## 3. 已完成工作
 
 完成 Chat、Agents、Settings 中文界面；真实模型对话、Markdown、工具活动、停止与单次审批；多身份和版本化人格、会话映射、消息及配置的 SQLite 持久化；运行时可用性检查；客户端重连、Host 重启及进程退出处理。
+
+本次已将运行中的本机实例切换到项目 `data/` 下的数据库副本，保留原目录；已在 Runtime 设置保存用户选择的代理，专用 Codex 已完成官方登录，原 8080 端口可用。
 
 ## 4. 当前实际架构
 
@@ -25,11 +27,14 @@ React/Vite Web 通过 HTTP 和 SSE 访问 Fastify Host。一个 Host 独占一�
 | `packages/agent-core/src/index.ts`、`packages/agent-codex/src/index.ts` | 通用接口与原生协议映射、沙箱、流式更新和线程恢复 |
 | `apps/web/src/main.tsx`、`apps/web/src/chat.tsx` | SSE 重连、当前会话选择及消息展示 |
 | `tests/live-smoke.mjs`、`tests/real-runtime.ts` | 从 Host 和从 Adapter 两个层次复验真实模型 |
+| `apps/host/src/paths.ts`、`apps/host/src/codex-login.ts` | 项目内默认路径与专用官方登录，复用 Runtime 的可执行文件与代理配置 |
+| `packages/agent-codex/src/home.ts`、`tests/native-isolation.ts` | 私有存储、路径核对与两份原生列表的隔离验证 |
 
 ## 6. 技术验证与测试结果
 
 - 运行 `codex --version`、`codex login status`、`codex app-server generate-ts`；本机为 `codex-cli 0.171.0-alpha.13.2`，使用原生 ChatGPT 登录。
-- `npm ci`、`npm run build`、`npm test`（3 个文件、13 项）、`npm audit` 已通过。开发模式与生产模式均实际启动并接受请求。
+- 本次 `npm test` 通过 5 个文件、21 项，`npm run build` 通过。初版验收还执行了 `npm ci` 和 `npm audit`。
+- 本次真实登录及云端复测验证了配置代理、跨进程恢复以及私有线程列表。两轮真实消息使用临时 Nexus 数据库。Chrome 验证代理保存、清空及重启；隔离的本机协议服务另提供可重复的 `npx tsx tests/native-isolation.ts` 验证。
 - 已运行 `npm run test:live`。模型读取临时文件并报告随机结果，客户端断开期间任务继续；重新启动 Host 后继续使用原线程，模型复述之前的结果，下一轮可取消。
 - 系统 Chrome 实际创建身份、修改设置、检测 Runtime、发消息并在执行中关闭页面。重开后收到含预设人格前缀的回复。390px 宽下三页均可操作。
 - 在独立进程强制终止 Host 后重新启动：保留部分文本和线程映射，遗留任务标记为中断，再次发送成功。测试结果、网络超时记录及其他未验证范围见 [进度](progress.md) 和 [协议探针](runtime-verification.md)。
@@ -37,9 +42,13 @@ React/Vite Web 通过 HTTP 和 SSE 访问 Fastify Host。一个 Host 独占一�
 
 ## 7. 与原始设计的差异
 
+新增独立 Codex home，固定每个实例的线程存储与日志路径。首次需要独立登录；新会话保留原生恢复能力。设置页可保存 HTTP(S) 代理，清空后恢复默认代理解析。详见 [架构决策](adr/003-private-codex-home.md)。
+
 本机已有 Node.js 22.18 与 npm，使用 npm 锁文件和内置 SQLite 驱动，减少 Windows 安装步骤。前端使用 React、Lucide、自有 CSS 和 Markdown 渲染器。每个 Turn 启动一个进程以隔离故障。SSE 合并资源变化通知，Client 获取顺序一致的快照，免于维护事件重放队列；后续可在协议内增加分页和增量更新。
 
 ## 8. 当前问题与风险
+
+- 旧版写入日常 Codex 的线程仍在原位置。迁入旧 SQLite 后可阅读平台历史，要在专用目录继续工作需新建会话。隔离实测按原生 API 的线程 ID 比对；未逐版本检查所有桌面端 UI，也未测试跨设备同步策略。
 
 - 模型服务曾出现连接重试乃至超时，显式设置已有代理后真实调用成功。进程、协议、账户检测和模型连通性是不同的检查。Windows 复杂代理例外须由用户按实际网络策略处理。
 - 部分 PowerShell 操作遇到本机 Windows 沙箱启动问题；已验证单次批准限定文件读取后工具正常返回。未知权限请求拒绝。交付保留原生沙箱和审批。
@@ -52,4 +61,4 @@ React/Vite Web 通过 HTTP 和 SSE 访问 Fastify Host。一个 Host 独占一�
 
 ## 10. 下一步开发计划
 
-负责人提供远程仓库地址后推送本地提交。按 [README](../README.md) 体验本地 MVP，根据反馈确定 V0.2 范围。
+负责人提供远程地址后可推送本地提交。按 [README](../README.md) 体验已切换的本机实例，根据反馈确定 V0.2 范围。

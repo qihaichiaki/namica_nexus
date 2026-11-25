@@ -2,13 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import type { FastifyInstance } from 'fastify'
 import { buildHost } from '../apps/host/src/app.js'
-import type { AgentAdapter, AgentEvent, AgentInput } from '../packages/agent-core/src/index.js'
+import type { AgentAdapter, AgentEvent, AgentInput, AgentOptions } from '../packages/agent-core/src/index.js'
 import type { SessionSnapshot } from '../packages/protocol/src/index.js'
 
 /** Keep runtime I/O under test control while exercising the real HTTP and SQLite paths. */
 function controlledRuntime() {
+  const checks: AgentOptions[] = []
   const runs: {
     input: AgentInput
     publish: (event: AgentEvent) => void
@@ -18,7 +20,10 @@ function controlledRuntime() {
   const adapter: AgentAdapter = {
     type: 'codex',
     capabilities: { resume: true, stream: true, cancel: true, approvals: true },
-    async checkAvailability() { return { available: true, version: 'test', detail: 'ready' } },
+    async checkAvailability(options) {
+      checks.push(options)
+      return { available: true, version: 'test', detail: 'ready' }
+    },
     run(input, publish) {
       let resolve!: (value: 'completed' | 'cancelled') => void
       let reject!: (reason: Error) => void
@@ -30,7 +35,7 @@ function controlledRuntime() {
       return { done, cancel: () => resolve('cancelled'), respondApproval: () => false }
     },
   }
-  return { runs, adapter }
+  return { runs, checks, adapter }
 }
 
 describe('local Host', () => {
@@ -119,6 +124,50 @@ describe('local Host', () => {
     await app.close()
     app = await connect()
     expect((await api('GET', '/host/config')).json()).toMatchObject({ executionTimeoutSeconds: 90, logLevel: 'warn' })
+  })
+
+  it('loads a legacy runtime, persists its proxy and passes the selection to checks and turns', async () => {
+    const route = '/runtimes/codex'
+    await app.close()
+    const db = new DatabaseSync(join(dataDirectory, 'nexus.sqlite'))
+    try {
+      db.exec("UPDATE runtimes SET json=json_remove(json,'$.proxyUrl')")
+    } finally { db.close() }
+    app = await connect()
+    expect((await api('GET', '/runtimes')).json()[0].proxyUrl).toBe('')
+    const proxyUrl = 'https://proxy.example.test:7443'
+    expect((await api('PATCH', route, {proxyUrl})).json().proxyUrl).toBe(proxyUrl)
+    await app.close()
+    app = await connect()
+    expect((await api('POST', route + '/check')).json().proxyUrl).toBe(proxyUrl)
+    expect(runtime.checks.at(-1)?.proxyUrl).toBe(proxyUrl)
+    const session = await createSession(await createIdentity('Proxy test', ''))
+    await send(session, 'test')
+    expect(runtime.runs[0].input.proxyUrl).toBe(proxyUrl)
+    expect((await api('PATCH', route, {proxyUrl: ''})).statusCode).toBe(409)
+    runtime.runs[0].complete()
+    await expect.poll(async () => (await snapshot(session)).session.status).toBe('completed')
+    expect((await api('PATCH', route, {proxyUrl: ''})).json().proxyUrl).toBe('')
+    await send(session, 'test again')
+    expect(runtime.runs[1].input.proxyUrl).toBe('')
+    runtime.runs[1].complete()
+  })
+
+  it('accepts proxy endpoints and rejects credentials or URL suffixes without echoing the input', async () => {
+    const route = '/runtimes/codex'
+    for (const proxyUrl of ['http://localhost:7890', 'http://192.168.1.8:9080/', 'https://[::1]']) {
+      expect((await api('PATCH', route, {proxyUrl})).json().proxyUrl).toBe(proxyUrl)
+    }
+    for (const proxyUrl of [
+      'http://user:private-marker@127.0.0.1', 'socks5://localhost:1090', 'http://localhost/private-marker',
+      'http://localhost/?key=private-marker', 'https://localhost#private-marker', 'http://localhost:99999',
+      'http://localhost/private-marker/..', 'http://@localhost',
+    ]) {
+      const response = await api('PATCH', route, {proxyUrl})
+      expect(response.statusCode).toBe(400)
+      expect(response.body).not.toContain('private-marker')
+    }
+    expect((await api('GET', '/runtimes')).json()[0].proxyUrl).toBe('https://[::1]')
   })
 
   it('rejects foreign hosts and origins and invalid timeout values', async () => {

@@ -35,12 +35,20 @@ export function manualProxyEnv(settings: string): NodeJS.ProcessEnv {
   return result
 }
 
-export async function runtimeEnv(): Promise<NodeJS.ProcessEnv> {
+export async function runtimeEnv(proxyUrl?: string): Promise<NodeJS.ProcessEnv> {
   const env = { ...process.env }
   // A launched runtime must not attach tools to the developer's desktop task.
   for (const key of ['CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_TOOL_CALL_ID',
     'CODEX_APP_TOOLS_PIPE_PATH', 'CODEX_PERMISSION_PROFILE', 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE']) delete env[key]
-  const explicit = Object.keys(env).some(key => /^(https?|all)_proxy$/i.test(key))
+  const proxyKeys = Object.keys(env).filter(key => /^(https?|all)_proxy$/i.test(key))
+  if (proxyUrl) {
+    // A lower-case variable or an inherited ALL_PROXY must not shadow the user's selection.
+    for (const key of proxyKeys) delete env[key]
+    env.HTTP_PROXY = proxyUrl
+    env.HTTPS_PROXY = proxyUrl
+    return env
+  }
+  const explicit = proxyKeys.length > 0
   if (process.platform !== 'win32' || explicit || !env.SystemRoot) return env
   try {
     const { stdout } = await exec(join(env.SystemRoot, 'System32', 'reg.exe'), ['query', internetSettings], {

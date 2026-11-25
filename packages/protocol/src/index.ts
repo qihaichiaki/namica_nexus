@@ -20,6 +20,7 @@ export interface Runtime {
   executable: string
   workspace: string
   model: string
+  proxyUrl: string
   version: string | null
   available: boolean | null
   detail: string

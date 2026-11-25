@@ -1,10 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentAdapter, AgentEvent, AgentInput, AgentOptions, AgentRun } from '../../agent-core/src/index.js'
 import { fields, Rpc, stringValue, summary, type Fields } from './rpc.js'
-import { runtimeEnv } from './proxy.js'
+import { codexEnvironment } from './home.js'
 
 type Outcome = 'completed' | 'cancelled'
 type RequestId = string | number
+
+const loginHint = 'Nexus 专用 Codex 尚未登录。请在项目目录运行 npm run codex:login 后重新检测。'
+
+async function authenticated(rpc: Rpc): Promise<boolean> {
+  const result = await rpc.request('account/read', { refreshToken: false })
+  return Boolean(result.account) || result.requiresOpenaiAuth === false
+}
 
 function safeLabel(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && summary(value) === value
@@ -74,16 +81,17 @@ class CodexTurn implements AgentRun {
   private readonly texts = new Map<string, string>()
   private readonly files = new Map<string, string>()
 
-  constructor(input: AgentInput, private readonly publish: (event: AgentEvent) => void) {
+  constructor(input: AgentInput, private readonly publish: (event: AgentEvent) => void, private readonly home: string) {
     this.done = new Promise((resolve, reject) => { this.resolve = resolve; this.reject = reject })
     void this.start(input).catch(error => this.finish(error instanceof Error ? error : new Error('Codex startup failed')))
   }
 
   private async start(input: AgentInput) {
-    const env = await runtimeEnv()
+    const env = await codexEnvironment(this.home, input.proxyUrl, input.workspace)
     if (this.ended) return
     this.rpc = new Rpc(input, env, message => this.receive(message), error => this.finish(error))
     await this.rpc.initialize()
+    if (!await authenticated(this.rpc)) throw new Error(loginHint)
     const params: Fields = {
       cwd: input.workspace, sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'user',
       developerInstructions: input.instructions
@@ -91,6 +99,7 @@ class CodexTurn implements AgentRun {
     if (input.model) params.model = input.model
     const result = input.runtimeSessionId
       ? await this.rpc.request('thread/resume', { ...params, threadId: input.runtimeSessionId, excludeTurns: true })
+        .catch(error => { throw new Error('无法从 Nexus 专用目录恢复该会话，可新建会话继续。' + summary(error.message)) })
       : await this.rpc.request('thread/start', params)
     const sandbox = fields(result.sandbox).type
     if (!['workspaceWrite', 'readOnly'].includes(String(sandbox))
@@ -235,18 +244,15 @@ class CodexTurn implements AgentRun {
   }
 }
 
-async function checkAvailability(options: AgentOptions) {
+async function checkAvailability(options: AgentOptions, home: string) {
   let rpc: Rpc | undefined
   let version: string | null = null
   try {
-    rpc = new Rpc(options, await runtimeEnv(), message => {
+    rpc = new Rpc(options, await codexEnvironment(home, options.proxyUrl, options.workspace), message => {
       if (rpc && (typeof message.id === 'string' || typeof message.id === 'number')) deny(rpc, message.method, message.id)
     }, () => {})
     version = await rpc.initialize()
-    const result = await rpc.request('account/read', { refreshToken: false })
-    if (!result.account && result.requiresOpenaiAuth !== false) {
-      return { available: false, version, detail: 'Run codex login, then test again.' }
-    }
+    if (!await authenticated(rpc)) return { available: false, version, detail: loginHint }
     return { available: true, version, detail: 'Codex app-server is ready.' }
   } catch (error) {
     return { available: false, version, detail: summary(error instanceof Error ? error.message : 'Codex unavailable') }
@@ -256,9 +262,11 @@ async function checkAvailability(options: AgentOptions) {
   }
 }
 
-export const codexAdapter: AgentAdapter = {
-  type: 'codex',
-  capabilities: { resume: true, stream: true, cancel: true, approvals: true },
-  checkAvailability,
-  run: (input, publish) => new CodexTurn(input, publish)
+export function createCodexAdapter(privateHome: string): AgentAdapter {
+  return {
+    type: 'codex',
+    capabilities: { resume: true, stream: true, cancel: true, approvals: true },
+    checkAvailability: options => checkAvailability(options, privateHome),
+    run: (input, publish) => new CodexTurn(input, publish, privateHome)
+  }
 }

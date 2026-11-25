@@ -10,7 +10,14 @@ function complete(status) { notify('turn/completed', { turn: { id: 'turn', statu
 createInterface({ input: process.stdin }).on('line', line => {
   const { id, method, params, result, error } = JSON.parse(line)
   const respond = output => send({ id, result: output })
-  if (method === 'initialize') respond({ userAgent: 'codex/1.2.0' })
+  const path = require('node:path')
+  if (method === 'initialize') {
+    const home = path.basename(process.env.CODEX_HOME) === 'bad-home' ? process.cwd() : process.env.CODEX_HOME
+    respond({ userAgent: 'codex/1.2.0', codexHome: home })
+  } else if (method === 'config/read') {
+    const sqlite = path.basename(process.env.CODEX_HOME) === 'bad-config' ? process.cwd() : process.env.CODEX_SQLITE_HOME
+    respond({config: {sqlite_home: sqlite, log_dir: path.join(process.env.CODEX_HOME, 'log')}})
+  }
   else if (method === 'account/read') respond({ account: { type: 'chatgpt' } })
   else if (method === 'thread/start') {
     assert.equal(params.sandbox, 'workspace-write')

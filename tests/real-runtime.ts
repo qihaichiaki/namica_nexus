@@ -1,13 +1,18 @@
 // Opt-in smoke test. This uses the signed-in Codex account and its model quota.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { codexAdapter } from '../packages/agent-codex/src/index.js'
+import { createCodexAdapter } from '../packages/agent-codex/src/index.js'
 import type { AgentEvent, AgentRun } from '../packages/agent-core/src/index.js'
 
-const workspace = await mkdtemp(join(tmpdir(), 'namica 验证-'))
+const privateHome = process.env.NEXUS_TEST_CODEX_HOME
+assert.ok(privateHome, 'Set NEXUS_TEST_CODEX_HOME to a separately signed-in Nexus codex-home.')
+const directory = await mkdtemp(join(tmpdir(), 'namica 验证-'))
+const workspace = join(directory, 'workspace')
+await mkdir(workspace)
+const codexAdapter = createCodexAdapter(privateHome)
 const options = { workspace, executable: process.env.NEXUS_TEST_CODEX ?? 'codex', model: process.env.NEXUS_TEST_MODEL }
 
 const passphrase = 'NAMICA-' + randomUUID().slice(0, 8)
@@ -62,5 +67,5 @@ try {
   await turn('What is two plus two?', true)
   console.log('PASS: identity, stream, disk-backed resume, workspace edit, cancellation')
 } finally {
-  await rm(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 })
+  await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 })
 }

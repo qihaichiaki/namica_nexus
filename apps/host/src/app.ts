@@ -1,26 +1,32 @@
 import Fastify from 'fastify'
 import staticFiles from '@fastify/static'
 import { existsSync, mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
 import type { ServerResponse } from 'node:http'
 import { isAbsolute, join, resolve } from 'node:path'
 import { z } from 'zod'
 import type { AgentAdapter } from '../../../packages/agent-core/src/index.js'
-import { codexAdapter } from '../../../packages/agent-codex/src/index.js'
+import { createCodexAdapter } from '../../../packages/agent-codex/src/index.js'
 import type { HostEvent, HostStatus, Runtime } from '../../../packages/protocol/src/index.js'
 import { HttpError, Store } from './store.js'
 import { Tasks } from './tasks.js'
+import { codexHomeFor, resolveDataDirectory } from './paths.js'
 
 const text = (max: number) => z.string().max(max)
 const requiredText = (max: number) => z.string().trim().min(1).max(max)
 const directory = text(32767).trim().refine(s => !s || isAbsolute(s), 'Workspace must be an absolute path.')
+// Check the original spelling too: URL normalizes dot segments, backslashes and empty userinfo.
+const proxyUrl = text(2048).trim().refine(value => {
+  if (!value) return true
+  if (!/^https?:\/\/[^/@?#\\\s]+\/?$/i.test(value) || !URL.canParse(value)) return false
+  return new URL(value).port !== '0'
+}, '请输入 HTTP(S) 代理地址，例如 http://127.0.0.1:7890。地址只包含协议、主机和可选端口。')
 const identitySchema = z.strictObject({
   name: requiredText(120), description: text(4096), personality: text(32000),
   avatar: text(2048), runtimeConfigId: requiredText(120), workspace: directory,
 })
 const runtimePatch = z.strictObject({
-  executable: requiredText(32767), workspace: directory.refine(Boolean, 'Workspace is required.'),
-  model: text(300), enabled: z.boolean(),
+  executable: requiredText(32767), workspace: directory,
+  model: text(300), enabled: z.boolean(), proxyUrl,
 }).partial()
 const configPatch = z.strictObject({
   logLevel: z.enum(['debug','info','warn','error']),
@@ -35,8 +41,7 @@ export interface HostOptions {
   adapterFactory?: (runtime: Runtime) => AgentAdapter
 }
 export async function buildHost(options: HostOptions = {}) {
-  const dataDirectory = resolve(options.dataDirectory ?? process.env.NEXUS_DATA_DIR ??
-    join(process.env.LOCALAPPDATA || join(homedir(), '.local', 'share'), 'NamicaNexus'))
+  const dataDirectory = resolveDataDirectory(options.dataDirectory)
   const configuredPort = options.port ?? Number(process.env.NEXUS_PORT ?? 8080)
   if (!Number.isInteger(configuredPort) || configuredPort < 0 || configuredPort > 65535) throw new Error('Invalid Host port.')
   const store = new Store(dataDirectory)
@@ -45,6 +50,7 @@ export async function buildHost(options: HostOptions = {}) {
     bodyLimit: 1024 * 1024,
     logController: new Fastify.LogController({disableRequestLogging: true}),
   })
+  const codexAdapter = createCodexAdapter(codexHomeFor(dataDirectory))
   const adapterFor = options.adapterFactory ?? ((runtime: Runtime) => {
     if (runtime.type !== codexAdapter.type) throw new HttpError(400, 'Unknown runtime type.')
     return codexAdapter

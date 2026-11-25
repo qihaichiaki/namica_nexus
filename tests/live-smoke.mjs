@@ -1,4 +1,4 @@
-// Run after npm run build. Uses the current Codex login and real model calls.
+// Run after npm run build. Uses a dedicated Nexus Codex login and real model calls.
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
@@ -6,7 +6,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { buildHost } from '../dist/apps/host/src/app.js'
+import { createCodexAdapter } from '../dist/packages/agent-codex/src/index.js'
 
+assert.ok(process.env.NEXUS_TEST_CODEX_HOME, 'Set NEXUS_TEST_CODEX_HOME to a separately signed-in Nexus codex-home.')
+const adapter = createCodexAdapter(process.env.NEXUS_TEST_CODEX_HOME)
 const dataDirectory = await mkdtemp(join(tmpdir(), 'Namica 验收 '))
 const workspace = join(dataDirectory, 'workspace')
 let base
@@ -14,7 +17,7 @@ let app
 let feed
 
 async function start() {
-  app = await buildHost({ dataDirectory, port: 0 })
+  app = await buildHost({ dataDirectory, port: 0, adapterFactory: () => adapter })
   base = await app.listen({ host: '127.0.0.1', port: 0 })
 }
 async function request(path, body, method = body === undefined ? 'GET' : 'POST') {

@@ -49,7 +49,8 @@ export class Tasks {
     try {
       mkdirSync(session.workspace, {recursive: true})
       const handle = adapter.run({
-        executable: runtime.executable, model: runtime.model, workspace: session.workspace, instructions: session.instructions,
+        executable: runtime.executable, model: runtime.model, proxyUrl: runtime.proxyUrl,
+        workspace: session.workspace, instructions: session.instructions,
         runtimeSessionId: session.runtimeSessionId, message,
       }, event => this.receive(task, event))
       task.handle = handle

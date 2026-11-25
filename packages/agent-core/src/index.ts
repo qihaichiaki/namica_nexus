@@ -3,6 +3,7 @@ export interface AgentOptions {
   executable: string
   workspace: string
   model?: string | null
+  proxyUrl?: string
 }
 
 export interface AgentInput extends AgentOptions {

@@ -28,7 +28,9 @@ Host 通过 `adapterFactory(runtime)` 选取 Adapter。Adapter 在 `run(input, p
 
 ## 数据和身份
 
-数据库文件为数据目录中的 `nexus.sqlite`。默认数据目录为 Windows 当前用户的 `%LOCALAPPDATA%/NamicaNexus`，默认工作区为其下的 `workspace`。SQLite 使用外键、WAL 与独占连接；每个数据目录同一时间只允许一个 Host 写入并进行启动恢复。
+Host 相对于启动工作目录解析 `data/`，也可由 `NEXUS_DATA_DIR` 覆盖。目录下的 `nexus.sqlite` 保存业务数据和设置，`workspace/` 是默认工作区，`codex-home/` 是独立的官方 Codex 配置、原生线程、数据库和日志目录。整个默认数据目录由 Git 忽略。SQLite 使用外键、WAL 与独占连接；每个数据目录同一时间只允许一个 Host 写入并进行启动恢复。
+
+默认工作目录在库中保存为继承标记，运行时相对于当前数据目录解析，所以可随目录一起搬迁。启动时以事务修正旧版写入的已知默认绝对路径。用户指定的外部工作区继续使用绝对路径。
 
 | 表 | 标识和关键内容 |
 | --- | --- |
@@ -89,9 +91,11 @@ SSE 发送已经落库的变更通知，例如 `{"type":"session.changed","sessi
 | Host 默认 Runtime | 创建身份且省略 runtimeConfigId 时采用。 |
 | 人格、身份工作区、Runtime 绑定 | 新建会话时捕获。 |
 | Runtime 默认工作区 | 新建会话时，身份工作区留空才继承。 |
-| Runtime 的启用、可执行文件与模型 | 后续 Turn 读取；存在活动 Turn 或检查时返回 409，避免运行中改配。 |
+| Runtime 的启用、可执行文件、模型与代理 | 后续调用读取。已保存的代理用于专用登录、检测和 Turn；清空后沿用进程环境及支持的系统代理。活动 Turn 或检测期间改配返回 409。 |
 | 端口、数据目录 | 启动时从 NEXUS_PORT、NEXUS_DATA_DIR 读取。 |
 
 ## 本地访问边界
+
+每个 Host 的 Codex 工厂绑定该数据目录的 `codex-home`。启动子进程时设置其私有 `CODEX_HOME`、SQLite 与日志位置，并在 RPC 握手后核对实际值。首次登录使用同一目录和代理的官方 CLI；切换前的线程映射从专用库恢复失败时向用户提示新建会话。日常 Codex 的旧列表保留原貌。详见 [原生线程存储决策](adr/003-private-codex-home.md)。
 
 Host 校验精确的 Host、Origin 和浏览器跨站请求标记；生产仅监听 `127.0.0.1`。开发模式额外识别固定的本机 Vite 来源。API 未开放通配 CORS。静态页面使用同源 CSP。Runtime 子进程以固定参数启动 App Server，认证由 Codex 管理。Host 没有 Shell HTTP 接口。单用户本机进程属于信任边界，远程客户端和设备认证属于后续版本。架构决策见 [Host 与 Adapter](adr/001-host-and-adapters.md) 和 [本地存储](adr/002-local-storage.md)。

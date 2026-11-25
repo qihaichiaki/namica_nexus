@@ -1,6 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type {
   HostConfig, Identity, Message, Runtime, Session, SessionSnapshot, ToolActivity, Turn, TurnStatus,
@@ -13,13 +14,15 @@ export class HttpError extends Error {
 const timestamp = () => new Date().toISOString()
 const defaultConfig: HostConfig = { logLevel: 'info', executionTimeoutSeconds: 600, defaultRuntimeId: 'codex' }
 export type IdentityFields = Pick<Identity, 'name' | 'description' | 'avatar' | 'workspace' | 'personality' | 'runtimeConfigId'>
-export type RuntimeFields = Pick<Runtime, 'enabled' | 'executable' | 'workspace' | 'model'>
+export type RuntimeFields = Pick<Runtime, 'enabled' | 'executable' | 'workspace' | 'model' | 'proxyUrl'>
 type StoredSession = Session & { instructions: string; workspace: string }
 
 export class Store {
   private db: DatabaseSync
+  private defaultWorkspace: string
 
   constructor(directory: string) {
+    this.defaultWorkspace = join(directory, 'workspace')
     mkdirSync(directory, { recursive: true })
     this.db = new DatabaseSync(join(directory, 'nexus.sqlite'))
     try {
@@ -46,11 +49,16 @@ export class Store {
         CREATE INDEX IF NOT EXISTS turn_session ON turns(sessionId);
         CREATE INDEX IF NOT EXISTS tool_turn ON tools(turnId);`)
       const runtime: Runtime = {
-        id: 'codex', type: 'codex', enabled: true, executable: 'codex', workspace: join(directory, 'workspace'),
-        model: '', available: null, version: null, detail: '', processState: 'idle',
+        id: 'codex', type: 'codex', enabled: true, executable: 'codex', workspace: '',
+        model: '', proxyUrl: '', available: null, version: null, detail: '', processState: 'idle',
       }
       this.tx(() => {
         this.run('INSERT OR IGNORE INTO runtimes VALUES (?,?)', runtime.id, JSON.stringify(runtime))
+        this.run("UPDATE runtimes SET json=json_set(json,'$.proxyUrl','') WHERE json_type(json,'$.proxyUrl') IS NULL")
+        if (this.one<{user_version: number}>('PRAGMA user_version').user_version === 0) {
+          this.migrateLegacyWorkspaces()
+          this.db.exec('PRAGMA user_version=1')
+        }
         this.run('INSERT OR IGNORE INTO hostConfig VALUES (1,?)', JSON.stringify(defaultConfig))
         this.run("UPDATE turns SET status='interrupted',error='Host stopped before this turn finished.' WHERE status='running'")
         this.run("UPDATE messages SET status='interrupted' WHERE status='running'")
@@ -61,6 +69,18 @@ export class Store {
   }
 
   close() { this.db.close() }
+  private migrateLegacyWorkspaces() {
+    // Earlier releases froze the generated absolute path. Only the exact known defaults
+    // can be safely identified when opening a copied database, including on first upgrade.
+    const oldDataRoot = process.env.LOCALAPPDATA || join(homedir(), '.local', 'share')
+    const candidates = new Set([this.defaultWorkspace, join(oldDataRoot, 'NamicaNexus', 'workspace')])
+    for (const path of candidates) {
+      this.run("UPDATE runtimes SET json=json_set(json,'$.workspace','') WHERE json_extract(json,'$.workspace')=?", path)
+      this.run(`UPDATE sessions SET workspace='' WHERE workspace=? AND NOT EXISTS (
+        SELECT 1 FROM identities WHERE identities.id=sessions.identityId
+          AND json_extract(identities.json,'$.workspace')=sessions.workspace)`, path)
+    }
+  }
   private run(sql: string, ...args: SQLInputValue[]) { return this.db.prepare(sql).run(...args) }
   private rows<T>(sql: string, ...args: SQLInputValue[]) {
     return this.db.prepare(sql).all(...args) as unknown as T[]
@@ -84,11 +104,23 @@ export class Store {
     this.run('UPDATE hostConfig SET json=? WHERE id=1', JSON.stringify(config))
     return config
   }
-  runtimes(): Runtime[] { return this.rows<{json: string}>('SELECT json FROM runtimes').map(r => JSON.parse(r.json)) }
-  runtime(id: string): Runtime { return JSON.parse(this.one<{json: string}>('SELECT json FROM runtimes WHERE id=?', id).json) }
+  private resolveRuntime(runtime: Runtime): Runtime {
+    return {...runtime, workspace: runtime.workspace || this.defaultWorkspace}
+  }
+  private storedRuntime(id: string): Runtime {
+    return JSON.parse(this.one<{json: string}>('SELECT json FROM runtimes WHERE id=?', id).json)
+  }
+  runtimes(): Runtime[] {
+    return this.rows<{json: string}>('SELECT json FROM runtimes').map(r => this.resolveRuntime(JSON.parse(r.json)))
+  }
+  runtime(id: string) { return this.resolveRuntime(this.storedRuntime(id)) }
   saveRuntime(runtime: Runtime) {
-    this.run('UPDATE runtimes SET json=? WHERE id=?', JSON.stringify(runtime), runtime.id)
-    return runtime
+    // API clients post the displayed absolute path back when saving unrelated settings.
+    const previousWorkspace = this.storedRuntime(runtime.id).workspace
+    const workspace = !previousWorkspace && runtime.workspace === this.defaultWorkspace ? '' : runtime.workspace
+    const stored = {...runtime, workspace}
+    this.run('UPDATE runtimes SET json=? WHERE id=?', JSON.stringify(stored), runtime.id)
+    return this.resolveRuntime(stored)
   }
   identities(): Identity[] { return this.rows<{json: string}>('SELECT json FROM identities ORDER BY rowid').map(r => JSON.parse(r.json)) }
   identity(id: string): Identity { return JSON.parse(this.one<{json: string}>('SELECT json FROM identities WHERE id=?', id).json) }
@@ -111,14 +143,17 @@ export class Store {
       ? this.rows<Session>(select + ' ORDER BY updatedAt DESC, rowid DESC')
       : this.rows<Session>(select + ' WHERE identityId=? ORDER BY updatedAt DESC, rowid DESC', identityId)
   }
-  storedSession(id: string) { return this.one<StoredSession>('SELECT * FROM sessions WHERE sessionId=?', id) }
+  storedSession(id: string) {
+    const session = this.one<StoredSession>('SELECT * FROM sessions WHERE sessionId=?', id)
+    return {...session, workspace: session.workspace || this.defaultWorkspace}
+  }
   session(id: string): Session {
     const {instructions, workspace, ...session} = this.storedSession(id)
     return { ...session, title: session.title || '新会话' }
   }
   createSession(identityId: string, title = '') {
     const identity = this.identity(identityId)
-    const runtime = this.runtime(identity.runtimeConfigId)
+    const runtime = this.storedRuntime(identity.runtimeConfigId)
     const id = randomUUID(), now = timestamp()
     const instructions = [
       'Nexus identity: ' + identity.name, identity.description, identity.personality,

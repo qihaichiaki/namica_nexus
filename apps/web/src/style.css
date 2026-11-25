@@ -202,6 +202,10 @@ code, pre { font-family: var(--mono); }
 .runtime-glyph { width:39px; height:39px; border-radius:9px; background:#e8eee1; color:var(--green); display:grid; place-items:center; }
 .runtime-summary strong,.runtime-summary small { display:block; }
 .runtime-summary strong { font-size:15px; }.runtime-summary small { margin-top:3px; }
+.runtime-login { border-top:1px solid var(--line); margin-top:18px; padding-top:16px; }
+.runtime-login h3 { font-size:14px; margin:0 0 5px; }
+.runtime-login p { color:var(--muted); font-size:12px; line-height:1.65; }
+.runtime-login pre { color:var(--ink); background:#edf2e8; border-radius:5px; margin:8px 0; padding:8px 10px; user-select:all; overflow:auto; }
 .switch { margin-left:auto; font-size:13px; display:flex; gap:7px; align-items:center; cursor:pointer; position:relative; }
 .switch input { position:absolute; opacity:0; }
 .switch span { width:31px; height:18px; border-radius:10px; background:#a5b09e; padding:3px; }

@@ -1,22 +1,43 @@
 import { afterAll, beforeAll, expect, test } from 'vitest'
-import { copyFile, mkdtemp, rm } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent } from '../packages/agent-core/src/index.js'
-import { codexAdapter } from '../packages/agent-codex/src/index.js'
+import { createCodexAdapter } from '../packages/agent-codex/src/index.js'
 import { manualProxyEnv } from '../packages/agent-codex/src/proxy.js'
 
 let workspace: string
+let directory: string
+let codexAdapter: ReturnType<typeof createCodexAdapter>
 beforeAll(async () => {
-  workspace = await mkdtemp(join(tmpdir(), 'nexus-rpc-'))
+  directory = await mkdtemp(join(tmpdir(), 'nexus-rpc-'))
+  workspace = join(directory, 'work')
+  await mkdir(workspace)
+  codexAdapter = createCodexAdapter(join(directory, 'codex-home'))
   await copyFile(new URL('./fixtures/codex-server.cjs', import.meta.url), join(workspace, 'app-server'))
 })
-afterAll(() => rm(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
+afterAll(() => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
 function input(message: string) { return { executable: process.execPath, workspace, instructions: 'test', message } }
 
 test('handshakes without exposing account properties', async () => {
   const result = await codexAdapter.checkAvailability(input(''))
   expect(result).toEqual({ available: true, version: '1.2.0', detail: 'Codex app-server is ready.' })
+})
+
+test.each(['bad-home', 'bad-config'])('rejects storage mismatch from %s before starting a thread', async name => {
+  const adapter = createCodexAdapter(join(directory, name))
+  const result = await adapter.checkAvailability(input(''))
+  expect(result.available).toBe(false)
+  expect(result.detail).toContain('private Nexus')
+  const run = adapter.run(input('unused'), () => { throw new Error('Unexpected dispatched turn') })
+  await expect(run.done).rejects.toThrow('private Nexus')
+})
+
+test('rejects a private home within the agent working tree', async () => {
+  const adapter = createCodexAdapter(join(workspace, 'nested-home'))
+  const result = await adapter.checkAvailability(input(''))
+  expect(result.available).toBe(false)
+  expect(result.detail).toContain('工作目录分开')
 })
 
 test('confines stream events to this turn and routes single-use approvals', async () => {
