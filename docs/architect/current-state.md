@@ -8,6 +8,8 @@ V0.1 和 [TASK-001](../tasks/TASK-001-windows-launch-and-shutdown.md) 已验收�
 
 TASK-001 在 Node 24.22.3、npm 10.9.3 下通过生产构建、26 项自动化回归、7 组启动器场景及仓外集成验证。实际 Host 与原生启动器的并发复用、后台任务与关停恢复、无头浏览器和真实 Codex 的验证边界见[任务验收记录](../tasks/TASK-001-windows-launch-and-shutdown.md#验收记录)。
 
+本机管理 [TASK-002](../tasks/TASK-002-console-operations.md#交付与验收) 已在 `59aafe4` 验收。Console 集中管理专用登录、近期日志与启动设置。更改数据目录会迁移现有数据并保留备份。已用真实 Codex 验证源目录离线后原生线程仍能续聊，并用生产页面验证重启后自动进入新地址。当前回归基线为 42 项。
+
 ## 工程如何走到这里
 
 | Git 提交 | 与当前结论有关的变更 |

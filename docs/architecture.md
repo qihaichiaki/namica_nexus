@@ -75,6 +75,10 @@ Host 相对于启动工作目录解析 `data/`，也可由 `NEXUS_DATA_DIR` 覆�
 | GET | /manage/host/status、/manage/host/config | 服务标识、实例状态、活动 Turn 数、运行时长、数据目录及持久配置。 |
 | PATCH | /manage/host/config | 日志等级、执行超时、默认 Runtime。 |
 | POST | /manage/host/shutdown | Console 发送用户确认时的 `instanceId` 和 `activeTurns`。两者任一变化返回 409，请求方需重新确认。202 表示 Host 已受理。本机调用方也可用空 JSON 对象显式请求关停。 |
+| GET、PATCH | /manage/deployment | 读取当前与下次启动设置，保存本机监听地址、端口及目标数据目录。 |
+| POST、GET | /manage/host/restart、/manage/host/restart-result/:id | 确认活动任务数、实例与待应用设置后重启。原页面通过有时效的回执确认新实例或回退结果。 |
+| GET、POST | /manage/auth/codex、/manage/auth/codex/login、/manage/auth/codex/cancel、/manage/auth/codex/logout | 读取 Nexus 专用账号状态，发起官方授权、取消授权及退出。等待确认的授权会话由 Host 持有。 |
+| GET | /manage/logs、/manage/directories | 查询当前实例最近的诊断事件，或由用户逐级浏览本机目录。 |
 | GET | /manage/runtimes | 供 Console 与本机登录辅助命令读取部署配置。 |
 | PATCH、POST | /manage/runtimes/:id、/manage/runtimes/:id/check | 保存配置或启动真实可用性检查，返回 Runtime。 |
 | GET | /runtime-options、/identities | Client 的 Runtime 选项（ID、类型、启用状态、是否默认）和身份列表。 |
@@ -98,13 +102,13 @@ SSE 通知浏览器哪些资源需要重新读取，例如 `{"type":"session.cha
 | 人格、身份工作区、Runtime 绑定 | 新建会话时捕获。默认工作区可随数据目录搬迁。 |
 | Runtime 默认工作区 | 新建会话时，身份工作区留空才继承。 |
 | Runtime 的启用、可执行文件、模型与代理 | 后续调用读取。已保存的代理用于专用登录、检测和 Turn；清空后沿用进程环境及支持的系统代理。活动 Turn 或检测期间改配返回 409。 |
-| 端口、数据目录 | 启动时从 NEXUS_PORT、NEXUS_DATA_DIR 读取。 |
+| 监听地址、端口、数据目录 | 启动环境选择初始部署。Console 保存的设置在下一次启动或显式重启后生效。 |
 
 ## 本地访问边界
 
 每个 Host 的 Codex 工厂绑定该数据目录的 `codex-home`。启动子进程时设置其私有 `CODEX_HOME`、SQLite 与日志位置，并在 RPC 握手后核对实际值。首次登录使用同一目录和代理的官方 CLI；切换前的线程映射从专用库恢复失败时向用户提示新建会话。日常 Codex 的旧列表保留原貌。详见 [原生线程存储决策](adr/003-private-codex-home.md)。
 
-Host 校验精确的 Host、Origin 和浏览器跨站请求标记；生产仅监听 `127.0.0.1`。开发模式额外识别固定的本机 Vite 来源。API 未开放通配 CORS。静态页面使用同源 CSP。Runtime 子进程以固定参数启动 App Server，认证由 Codex 管理。Host 没有 Shell HTTP 接口。单用户本机进程属于信任边界，远程客户端和设备认证属于后续版本。架构决策见 [Host 与 Adapter](adr/001-host-and-adapters.md) 和 [本地存储](adr/002-local-storage.md)。
+Host 校验 Host、Origin 和浏览器跨站请求标记，仅监听 `127.0.0.1` 或 `::1`。开发模式额外识别本机 Vite 来源。跨地址重启时，原页面凭有时效的随机回执查询结果，再携回执导航至新 Console。新页面加载后从地址栏清除回执。业务接口和其他管理接口继续使用原本的来源限制。Codex 管理凭据，Console 展示登录状态及本次官方授权所需的信息。Host 日志通过固定事件字段进入有限的内存缓冲区。单用户本机进程属于信任边界，远程客户端和设备认证属于后续版本。[Host 与 Adapter](adr/001-host-and-adapters.md) · [本地存储](adr/002-local-storage.md)
 
 ## 所有权与扩展边界
 
@@ -127,3 +131,5 @@ Host 校验精确的 Host、Origin 和浏览器跨站请求标记；生产仅监
 ## Windows 启动和关闭
 
 双击启动器启动或复用目标 Host，就绪后打开 `/console/`。聊天 Client 保留在 `/`。关闭任一网页都会保留后台任务；Console 的显式关停和命令行退出由 Host 处理，活动任务和未结束的工具记为中断。地址、数据目录与本机实例的关系及验收范围见 [ADR 004](adr/004-windows-launch-and-shutdown.md) 和 [TASK-001](tasks/TASK-001-windows-launch-and-shutdown.md)。
+
+启动配置保存在数据树外。默认使用安装目录下由 Git 忽略的 `.nexus-deployment/`，可用 `NEXUS_DEPLOYMENT_FILE` 显式选择配置文件。数据目录迁移时，Host 先释放运行句柄并锁定源数据库，再将副本暂存到空目标内，验证并调整平台工作区及受支持的 Codex 线程索引，最后启用新配置。目标不可用时尝试恢复原设置。源码或依赖更新需停止再启动，以便新 Node 进程加载代码。[Console 运维验收](tasks/TASK-002-console-operations.md)
