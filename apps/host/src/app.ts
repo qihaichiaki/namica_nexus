@@ -14,6 +14,8 @@ import { codexHomeFor, resolveDataDirectory } from './paths.js'
 import { ConsoleCodexAuth } from './console-auth.js'
 import { Diagnostics } from './diagnostics.js'
 import { browseDirectories } from './directories.js'
+import { consoleUrl, deploymentSchema, probeEndpoint, type DeploymentProfile, type Deployment, type RestartTicket } from './deployment.js'
+import { validateMigration } from './migration.js'
 
 const text = (max: number) => z.string().max(max)
 const requiredText = (max: number) => z.string().trim().min(1).max(max)
@@ -42,6 +44,10 @@ const shutdownRequest = z.strictObject({
 })
 
 export interface HostOptions {
+  address?: Deployment['address']
+  deployment?: DeploymentProfile
+  restartResult?: RestartTicket
+  onRestart?: (ticket: RestartTicket) => void
   dataDirectory?: string
   port?: number
   dev?: boolean
@@ -49,6 +55,7 @@ export interface HostOptions {
   adapterFactory?: (runtime: Runtime) => AgentAdapter
 }
 export async function buildHost(options: HostOptions = {}) {
+  const address = options.address ?? '127.0.0.1'
   const dataDirectory = resolveDataDirectory(options.dataDirectory)
   const configuredPort = options.port ?? Number(process.env.NEXUS_PORT ?? 8080)
   if (!Number.isInteger(configuredPort) || configuredPort < 0 || configuredPort > 65535) throw new Error('Invalid Host port.')
@@ -120,9 +127,13 @@ export async function buildHost(options: HostOptions = {}) {
     const listening = app.server.address()
     return listening && typeof listening === 'object' ? listening.port : configuredPort
   }
+  const active = (): Deployment => ({address, port: port(), dataDirectory})
+  const ticket = options.restartResult
+  if (ticket) diagnostics.record(ticket.status === 'ready' ? 'restartCompleted' : 'restartReverted')
   app.addHook('onRequest', async (request, reply) => {
     const host = request.headers.host
-    const addresses = ['127.0.0.1', 'localhost'].map(name => port() === 80 ? name : name + ':' + port())
+    const names = address === '::1' ? ['[::1]', '[0000:0000:0000:0000:0000:0000:0000:0001]', 'localhost'] : [address, 'localhost']
+    const addresses = names.map(name => port() === 80 ? name : name + ':' + port())
     if (!host || !addresses.includes(host)) {
       diagnostics.record('unrecognizedHost')
       throw new HttpError(403, 'Unrecognized Host.')
@@ -130,15 +141,20 @@ export async function buildHost(options: HostOptions = {}) {
     const origin = request.headers.origin
     const devOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173']
     const devRequest = options.dev && origin !== undefined && devOrigins.includes(origin)
-    if ((origin !== undefined && origin !== 'http://' + host && !devRequest) ||
-        (request.headers['sec-fetch-site'] === 'cross-site' && !devRequest)) {
+    const receipt = request.method === 'GET' && ticket && Date.now() < ticket.expires &&
+      request.url === '/api/manage/host/restart-result/' + ticket.id && origin === ticket.origin
+    if (receipt) reply.header('Access-Control-Allow-Origin', ticket.origin).header('Vary', 'Origin')
+    if (!receipt && ((origin !== undefined && origin !== 'http://' + host && !devRequest) ||
+        (request.headers['sec-fetch-site'] === 'cross-site' && !devRequest))) {
       diagnostics.record('unrecognizedOrigin')
       throw new HttpError(403, 'Unrecognized Origin.')
     }
     assertOpen()
     reply.header('X-Content-Type-Options', 'nosniff')
     reply.header('Referrer-Policy', 'no-referrer')
-    reply.header('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+    const receiptPolicy = /^\/console(?:\/|\/index\.html)?(?:\?|$)/.test(request.url)
+      ? "connect-src 'self' http://127.0.0.1:* http://localhost:*; " : ''
+    reply.header('Content-Security-Policy', "default-src 'self'; " + receiptPolicy + "img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
     if (request.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store')
   })
   // A request may have entered before shutdown and still be receiving its body.
@@ -156,7 +172,7 @@ export async function buildHost(options: HostOptions = {}) {
   app.get('/api/manage/host/status', (): HostStatus => ({
     service: 'namica-nexus', instanceId, activeTurns: tasks.activeTurns,
     version: '0.1.0', status: 'running', uptimeSeconds: Math.floor((Date.now()-bootTime)/1000),
-    address: '127.0.0.1', port: port(), dataDirectory, logLevel: store.config().logLevel,
+    address, port: port(), dataDirectory, logLevel: store.config().logLevel,
   }))
   app.get('/api/manage/host/config', () => store.config())
   app.patch('/api/manage/host/config', req => {
@@ -166,10 +182,48 @@ export async function buildHost(options: HostOptions = {}) {
     publish({type: 'config.changed'})
     return config
   })
-  app.post('/api/manage/host/shutdown', (req, reply) => {
-    const expected = shutdownRequest.parse(req.body)
+  app.get('/api/manage/deployment', () => options.deployment?.read() ?? {active: active(), pending: active()})
+  app.patch('/api/manage/deployment', req => {
+    if (!options.deployment) throw new HttpError(409, '此 Host 未启用部署配置。')
+    const state = options.deployment.save(active(), req.body)
+    diagnostics.record('deploymentSaved')
+    return state
+  })
+  app.get<{Params: {id: string}}>('/api/manage/host/restart-result/:id', req => {
+    if (!ticket || req.params.id !== ticket.id || Date.now() >= ticket.expires) throw new HttpError(404, '重启结果已过期。')
+    return {status: ticket.status, consoleUrl: consoleUrl(active()), instanceId, error: options.deployment?.read().lastError}
+  })
+  function checkInstance(expected: z.infer<typeof shutdownRequest>) {
+    assertOpen()
     if (expected.instanceId !== undefined && expected.instanceId !== instanceId) throw new HttpError(409, 'Host instance changed.')
     if (expected.activeTurns !== undefined && expected.activeTurns !== tasks.activeTurns) throw new HttpError(409, 'Active turn count changed.')
+  }
+  app.post('/api/manage/host/restart', async (req, reply) => {
+    const expected = shutdownRequest.required().extend({expectedPending: deploymentSchema.optional()}).parse(req.body)
+    checkInstance(expected)
+    const profile = options.deployment
+    const restart = options.onRestart
+    if (!profile || !restart) throw new HttpError(409, '此 Host 未启用重启。')
+    const target = profile.read().pending
+    if (expected.expectedPending && JSON.stringify(expected.expectedPending) !== JSON.stringify(target)) {
+      throw new HttpError(409, '启动设置已更改，请重新确认。')
+    }
+    validateMigration(dataDirectory, target.dataDirectory, profile.file)
+    if (target.port !== port() || target.address !== address) await probeEndpoint(target)
+    checkInstance(expected)
+    if (JSON.stringify(target) !== JSON.stringify(profile.read().pending)) throw new HttpError(409, '启动设置已更改，请重新确认。')
+    diagnostics.record('restartRequested')
+    const id = randomUUID()
+    const origin = req.headers.origin ?? new URL(consoleUrl(active())).origin
+    reply.raw.once('close', () => {
+      void app.close().then(() => restart({id, origin, status: 'ready', expires: Date.now() + 300_000}))
+        .catch(() => diagnostics.record('restartFailed'))
+    })
+    void stopTasks()
+    return reply.code(202).send({consoleUrl: consoleUrl(target), restartId: id})
+  })
+  app.post('/api/manage/host/shutdown', (req, reply) => {
+    checkInstance(shutdownRequest.parse(req.body))
     // Close after the response is written or its connection is lost.
     reply.raw.once('close', () => {
       void app.close().catch(() => diagnostics.record('shutdownFailed'))

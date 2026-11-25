@@ -8,6 +8,8 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -36,7 +38,9 @@ internal static class Launcher
             string dataSetting = Environment.GetEnvironmentVariable("NEXUS_DATA_DIR");
             string dataDirectory = NormalizeDirectory(String.IsNullOrEmpty(dataSetting) ? "data" : dataSetting);
             int port = ReadPort();
-            var address = new UriBuilder("http", "127.0.0.1", port).Uri;
+            var seed = new Endpoint(Environment.GetEnvironmentVariable("NEXUS_ADDRESS") ?? "127.0.0.1", port, dataDirectory);
+            string profile = ProfilePath(root, seed);
+            Uri address;
 
             using (var startup = new Mutex(false, @"Local\NamicaNexus.Host." + port.ToString(CultureInfo.InvariantCulture)))
             {
@@ -52,7 +56,14 @@ internal static class Launcher
 
                 try
                 {
-                    EnsureHost(root, address, dataDirectory);
+                    Endpoint active = seed, pending = seed;
+                    if (File.Exists(profile))
+                    {
+                        var state = new JavaScriptSerializer().Deserialize<DeploymentState>(File.ReadAllText(profile));
+                        active = state.active.Validate();
+                        pending = state.pending.Validate();
+                    }
+                    address = EnsureHost(root, active, pending, seed, profile);
                 }
                 finally
                 {
@@ -60,7 +71,8 @@ internal static class Launcher
                 }
             }
 
-            string consoleUrl = new Uri(address, "/console/").AbsoluteUri;
+            string hostName = address.HostNameType == UriHostNameType.IPv6 ? "[::1]" : "127.0.0.1";
+            string consoleUrl = "http://" + hostName + (address.IsDefaultPort ? "" : ":" + address.Port.ToString(CultureInfo.InvariantCulture)) + "/console/";
             try
             {
                 openConsole(consoleUrl);
@@ -77,6 +89,45 @@ internal static class Launcher
             showError(error.Message);
             return 1;
         }
+    }
+
+    // The profile name must match deploymentProfile() in the Host.
+    private static string ProfilePath(string root, Endpoint seed)
+    {
+        var explicitFile = Environment.GetEnvironmentVariable("NEXUS_DEPLOYMENT_FILE");
+        if (!String.IsNullOrEmpty(explicitFile)) return Path.GetFullPath(explicitFile);
+        var key = seed.address + "\n" + seed.port.ToString(CultureInfo.InvariantCulture) + "\n" + seed.dataDirectory;
+        using (var sha = SHA256.Create())
+            return Path.Combine(root, ".nexus-deployment", BitConverter.ToString(
+                sha.ComputeHash(Encoding.UTF8.GetBytes(key))).Replace("-", "").ToLowerInvariant() + ".json");
+    }
+
+    internal sealed class DeploymentState
+    {
+        public Endpoint active { get; set; }
+        public Endpoint pending { get; set; }
+    }
+
+    internal sealed class Endpoint
+    {
+        public string address { get; set; }
+        public int port { get; set; }
+        public string dataDirectory { get; set; }
+
+        public Endpoint() { }
+        public Endpoint(string name, int number, string path)
+        {
+            address = name; port = number; dataDirectory = path;
+            Validate();
+        }
+        internal Endpoint Validate()
+        {
+            if ((address != "127.0.0.1" && address != "::1") || port < 1 || port > 65535 ||
+                String.IsNullOrEmpty(dataDirectory) || !Path.IsPathRooted(dataDirectory))
+                throw new InvalidOperationException("部署配置中的监听地址、端口或数据目录无效。");
+            return this;
+        }
+        internal Uri Uri { get { return new UriBuilder("http", address, port).Uri; } }
     }
 
     private static int ReadPort()
@@ -101,7 +152,7 @@ internal static class Launcher
             : path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
-    private static void EnsureHost(string root, Uri address, string dataDirectory)
+    private static Uri EnsureHost(string root, Endpoint active, Endpoint pending, Endpoint seed, string profile)
     {
         using (var http = new HttpClient(new HttpClientHandler {
             AllowAutoRedirect = false, UseCookies = false, UseProxy = false
@@ -110,11 +161,10 @@ internal static class Launcher
             MaxResponseContentBufferSize = 16 * 1024
         })
         {
-            var statusUrl = new Uri(address, "/api/manage/host/status");
-            if (IsReady(http, statusUrl, dataDirectory))
-                return;
-            if (!CanBind(address.Port))
-                throw PortInUse(address.Port, dataDirectory);
+            if (IsReady(http, active))
+                return active.Uri;
+            if (active.Uri == pending.Uri && !CanBind(active))
+                throw PortInUse(active.port, active.dataDirectory);
 
             if (!File.Exists(Path.Combine(root, HostEntry)) ||
                 !File.Exists(Path.Combine(root, @"apps\web\dist\index.html")) ||
@@ -124,23 +174,24 @@ internal static class Launcher
             var start = new ProcessStartInfo(FindNode(root), "\"" + HostEntry + "\"") {
                 WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true
             };
-            start.EnvironmentVariables["NEXUS_PORT"] = address.Port.ToString(CultureInfo.InvariantCulture);
-            start.EnvironmentVariables["NEXUS_DATA_DIR"] = dataDirectory;
+            start.EnvironmentVariables["NEXUS_DEPLOYMENT_FILE"] = profile;
+            start.EnvironmentVariables["NEXUS_PORT"] = seed.port.ToString(CultureInfo.InvariantCulture);
+            start.EnvironmentVariables["NEXUS_ADDRESS"] = seed.address;
+            start.EnvironmentVariables["NEXUS_DATA_DIR"] = seed.dataDirectory;
 
             using (var host = StartHost(start))
             {
                 var timer = Stopwatch.StartNew();
-                while (timer.Elapsed < TimeSpan.FromSeconds(18))
+                bool migrating = !String.Equals(active.dataDirectory, pending.dataDirectory, StringComparison.Ordinal);
+                while (timer.Elapsed < (migrating ? TimeSpan.FromMinutes(10) : TimeSpan.FromSeconds(18)))
                 {
-                    if (IsReady(http, statusUrl, dataDirectory))
-                        return;
+                    if (IsReady(http, pending)) return pending.Uri;
+                    if ((active.Uri != pending.Uri || migrating) && IsReady(http, active)) return active.Uri;
                     if (host.HasExited)
                     {
                         // A terminal-launched Host may have won the port since preflight.
-                        if (IsReady(http, statusUrl, dataDirectory))
-                            return;
-                        if (!CanBind(address.Port))
-                            throw PortInUse(address.Port, dataDirectory);
+                        if (IsReady(http, active)) return active.Uri;
+                        if (!CanBind(pending)) throw PortInUse(pending.port, pending.dataDirectory);
                         throw new InvalidOperationException("Host 启动失败（退出码 " + host.ExitCode +
                             "）。请在项目目录运行 npm start 查看原因。");
                     }
@@ -148,8 +199,8 @@ internal static class Launcher
                     Thread.Sleep(150);
                 }
 
-                throw new InvalidOperationException("等待 Host 就绪超时。请检查端口 " + address.Port +
-                    " 和数据目录 " + dataDirectory + "，或在项目目录运行 npm start 查看原因。");
+                throw new InvalidOperationException("等待 Host 就绪超时。请检查端口 " + pending.port +
+                    " 和数据目录 " + pending.dataDirectory + "，或在项目目录运行 npm start 查看原因。");
             }
         }
     }
@@ -186,14 +237,15 @@ internal static class Launcher
             dataDirectory + "\n\n请检查 NEXUS_DATA_DIR，或使用 NEXUS_PORT 指定其他端口。");
     }
 
-    private static bool CanBind(int port)
+    private static bool CanBind(Endpoint endpoint)
     {
-        using (var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp))
+        var ip = IPAddress.Parse(endpoint.address);
+        using (var socket = new Socket(ip.AddressFamily, SocketType.Stream, ProtocolType.Tcp))
         {
             try
             {
                 socket.ExclusiveAddressUse = true;
-                socket.Bind(new IPEndPoint(IPAddress.Loopback, port));
+                socket.Bind(new IPEndPoint(ip, endpoint.port));
                 return true;
             }
             catch (SocketException error)
@@ -205,18 +257,18 @@ internal static class Launcher
         }
     }
 
-    private static bool IsReady(HttpClient http, Uri statusUrl, string dataDirectory)
+    private static bool IsReady(HttpClient http, Endpoint endpoint)
     {
         try
         {
-            using (var response = http.GetAsync(statusUrl).GetAwaiter().GetResult())
+            using (var response = http.GetAsync(new Uri(endpoint.Uri, "/api/manage/host/status")).GetAwaiter().GetResult())
             {
                 if (response.StatusCode != HttpStatusCode.OK)
                     return false;
 
                 var json = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
                 var status = new JavaScriptSerializer().DeserializeObject(json) as Dictionary<string, object>;
-                return status != null && MatchesStatus(status, statusUrl.Port, dataDirectory);
+                return status != null && MatchesStatus(status, endpoint);
             }
         }
         catch (HttpRequestException) { return false; }
@@ -226,16 +278,16 @@ internal static class Launcher
         catch (NotSupportedException) { return false; }
     }
 
-    private static bool MatchesStatus(Dictionary<string, object> status, int port, string dataDirectory)
+    private static bool MatchesStatus(Dictionary<string, object> status, Endpoint endpoint)
     {
         object service, state, address, reportedPort, directory;
         return status.TryGetValue("service", out service) && Equals(service, "namica-nexus") &&
             status.TryGetValue("status", out state) && Equals(state, "running") &&
-            status.TryGetValue("address", out address) && Equals(address, "127.0.0.1") &&
-            status.TryGetValue("port", out reportedPort) && Equals(reportedPort, port) &&
+            status.TryGetValue("address", out address) && Equals(address, endpoint.address) &&
+            status.TryGetValue("port", out reportedPort) && Equals(reportedPort, endpoint.port) &&
             status.TryGetValue("dataDirectory", out directory) && directory is string &&
             Path.IsPathRooted((string)directory) &&
-            SameDirectory(dataDirectory, NormalizeDirectory((string)directory));
+            SameDirectory(endpoint.dataDirectory, NormalizeDirectory((string)directory));
     }
 
     private static bool SameDirectory(string expected, string reported)

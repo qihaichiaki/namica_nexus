@@ -6,6 +6,11 @@ const severity = { debug: 10, info: 20, warn: 30, error: 40 }
 const events = {
   hostStarted: ['info', 'Host started'],
   hostListening: ['info', 'Host is listening'],
+  deploymentSaved: ['info', 'Next startup settings saved'],
+  restartRequested: ['info', 'Host restart requested'],
+  restartCompleted: ['info', 'Host restart completed'],
+  restartReverted: ['warn', 'Host restarted with previous settings'],
+  restartFailed: ['error', 'Host restart failed'],
   hostStopping: ['info', 'Host is shutting down'],
   shutdownFailed: ['error', 'Host shutdown failed'],
   hostConfigUpdated: ['info', 'Host settings saved'],
