@@ -81,7 +81,7 @@ export function DeploymentSection({ restart, restartBusy }: {
           </div>
           <DirectoryField title="数据目录" name="dataDirectory" defaultValue={config.pending.dataDirectory} required disabled={action.pending}
             hint="请输入绝对路径或浏览本机文件夹。迁移目标须为空且可写。"/>
-          <p className="help">更换数据目录后，下次启动会复制现有身份、聊天历史及 Nexus 独立 Codex 的本地授权资料，并保留原目录作为备份。若授权由系统凭据库管理，迁移后可能需重新登录。</p>
+          <p className="help">更换数据目录后，下次启动会复制现有身份、聊天历史及 Nexus 独立 Codex 的本地授权资料，并保留原目录作为备份。若无法复制系统凭据库中的授权资料，Host 会取消迁移、继续使用原目录，并在此处显示原因。</p>
           <Notice notice={action.notice}/>
           <div className="form-actions">
             <button type="button" className="secondary" disabled={action.pending} onClick={() => setEditing(false)}>取消编辑</button>
