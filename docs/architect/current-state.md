@@ -1,6 +1,10 @@
 # V0.1.0 工程基线与首次架构审查
 
-2026-11-25，Windows，`main`。被审查的**业务源码**为 `43d2c17c40c31f5bddd0920404451bb6f11e4818`。开始时 Git 工作树干净，无已配置远端。依赖由根 `package.json` 和 npm v3 锁文件统一管理，Host 与 Web 共用 TypeScript 类型，分别编译。复验使用已有依赖，Node 22.18.0、npm 10.9.3。
+2026-11-25，Windows，`main`。被审查的**业务源码**为 `43d2c17c40c31f5bddd0920404451bb6f11e4818`。依赖由根 `package.json` 和 npm v3 锁文件统一管理，Host 与 Web 共用 TypeScript 类型，分别编译。复验使用已有依赖，Node 22.18.0、npm 10.9.3。
+
+## 接手位置
+
+V0.1 已验收，当前没有已派发的 V0.2 开发任务。下一步由 Architect 与负责人讨论[换 Runtime 后应延续哪些内容](open-questions.md)，结论将决定第二个真实 Runtime 的验证范围。核对新提交后继续这项讨论。
 
 ## 工程如何走到这里
 
@@ -11,17 +15,7 @@
 | `2e8fbb3` | 记录初版模型、工具和浏览器验收，属于当时的实测材料。 |
 | `43d2c17` | 专用 Codex home 与路径握手、Runtime 代理、默认工作区迁移、登录入口、对应测试。此提交仍为 v0.1.0。 |
 
-## 源码核对
-
-| 从哪里追踪 | 实际行为 |
-| --- | --- |
-| [Web 资源请求](../../apps/web/src/data.ts)、[界面订阅](../../apps/web/src/main.tsx) → [Host 路由](../../apps/host/src/app.ts) | 同源 HTTP 提交，SSE 只发送资源变化。浏览器按通知读快照，重连时重读。生产 Host 同时提供静态文件；Vite 开发模式代理 API。浏览器本地保存身份和会话选择。 |
-| [Store](../../apps/host/src/store.ts) 的 `saveIdentity`、`createSession` → [Tasks](../../apps/host/src/tasks.ts) 的 `start` | 一份 Identity 可创建多个 Session。名称、描述、人格按空行拼成指令，和人格版本一起在建会话时保存。后续身份编辑只影响新会话指令。工作目录允许共享，并无每身份文件隔离保证。 |
-| `Store.beginTurn` → `Tasks.start` → [通用接口](../../packages/agent-core/src/index.ts) | 事务写入 Turn、原文和回复占位后才向 Adapter 提交。活动任务按 Session 管理，SQLite 部分唯一索引限制每会话一个 running Turn。不同会话可同时工作。 |
-| [CodexTurn](../../packages/agent-codex/src/index.ts) → [Rpc](../../packages/agent-codex/src/rpc.ts) | 每轮启动子进程并验证私有存储路径、账号条件、沙箱及审批策略。首轮 `thread/start`，以后 `thread/resume`，两者均传 `developerInstructions`。`turn/start` 只发本次消息。原生事件映射为正文、工具与单次审批。结束关闭输入、等待退出，必要时限时终止。 |
-| `Tasks.finish/stop`、`Store.finish` 与启动事务 | 已收到的正文持续落库；失败、取消、执行超时和 Host 中断各有状态。启动修复遗留 running 记录，保留部分正文和已有线程映射。未完成的工具标为 interrupted。待审批项只存在于当前进程。没有自动重跑未完成工作的流程。 |
-
-完整的表、API、状态及配置生效时机以[实际架构](../architecture.md)为准。
+模块、接口、生命周期及源码路径由[实际架构](../architecture.md)维护。
 
 ## 证据与验证边界
 
@@ -32,10 +26,12 @@
 | 已实现 · 本次 HTTP 实测通过 | 构建后的 Host、随机回环端口、临时数据库 | 成功获取首页和 JS 资源，从 API 创建合成身份和会话，读到对应 SSE 通知，断开订阅后可重读会话快照。本项未执行页面交互。 |
 | 已实现 · 本次补充实测通过 | 实际 Host 与 SQLite、受控 Adapter | 5 秒超时后 Turn 为 failed 并注明超时，部分正文保留，工具中断，审批清空；新一轮运行时正常关闭 Host，重开后为 interrupted，保留已落盘正文和映射。两项补充探针独立于 Vitest 计数。 |
 | 已实现 · 本次原生协议实测通过 | 仓外运行 [native-isolation.ts](../../tests/native-isolation.ts)，`codex-cli 0.171.0-alpha.13.2` | 本机真实 App Server、回环合成 Responses、临时专用及空白对照 home。第二个进程恢复同一线程，请求中含第一轮标记。原生记录和列表仅在预期目录可见，冲突的数据库和日志目录未创建。对照使用空目录，本次没有检查个人日常列表。 |
-| 已实现 · 历史实测，本次未重跑 | [Runtime 实测](../runtime-verification.md)、[开发进度](../progress.md)、[云模型脚本](../../tests/live-smoke.mjs) | 既有记录报告真实云模型人格口令、工具和原生审批、断开 SSE 后续跑、重启续聊及取消，另有 Chrome 关闭重开和窄屏操作。本轮未调用云模型、未做 Chrome UI 实测；浏览器的一次性脚本未纳入仓库。 |
+| 已实现 · 历史实测，本次未重跑 | [Runtime 实测](../runtime-verification.md)、[云模型脚本](../../tests/live-smoke.mjs) | 既有记录报告真实云模型人格口令、工具和原生审批、断开 SSE 后续跑、重启续聊及取消，另以 Playwright 驱动 Chrome，在执行中关闭再重开页面，收到人格口令；390px 下三页无横向溢出。开发代理验证过 SSE 与写入，代理设置经保存、清空及重启验证。本轮未调用云模型、未做 Chrome UI 实测；浏览器的一次性脚本未纳入仓库。 |
 | 已实现 · 尚未验证的范围 | 工厂注入、能力声明、同步落库、全量快照 | 只有一个生产 Adapter。不同原生能力的真实互换、长会话下的响应耗时、持续高负载和其他 Codex 版本均未验收。 |
 | 仅存在设计 | [愿景](../vision.md)与[路线图](../roadmap.md) | Host 权威记忆、受控自主行为、多端及多身份协作有目标和约束，版本和选型仍待确认。 |
 | 尚未实现 | 对应产品与业务模块 | 第二个生产 Runtime、跨 Runtime 的会话迁移、可追溯记忆与检索、关系与任务调度、设备认证和手机 Client。 |
+
+历史验收原文可在业务提交 `43d2c17` 中追溯，例如 `git show 43d2c17:docs/progress.md`。旧库迁移覆盖副本升级、工作区路径与源库内容保持一致，回归见[迁移测试](../../tests/workspace-migration.test.ts)。
 
 ## 架构判断与风险
 

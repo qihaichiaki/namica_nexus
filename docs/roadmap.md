@@ -1,12 +1,6 @@
 # 路线图
 
-| 阶段 | V0.1 的可验收成果 | 验证记录 |
-| --- | --- | --- |
-| M0 技术验证 | 本机 App Server 协议、认证、人格注入、取消与恢复 | [Runtime 实测](runtime-verification.md) |
-| M1 最小闭环 | 从浏览器经 Host 向 Codex 提问并接收流式回复 | [开发交接](handoff.md) |
-| M2 身份与会话 | SQLite 保存身份、人格快照、消息和 Turn 结局 | [实际架构](architecture.md) |
-| M3 管理界面 | 聊天、身份管理、Host 和 Runtime 设置 | [使用说明](../README.md) |
-| M4 验收 | 真实交互、错误恢复、客户端重连及自动化测试 | [当前进度](progress.md) |
+V0.1 单机 MVP 已完成首次架构审查。代码基线、通过的测试和未验证范围见[工程基线](architect/current-state.md)。
 
 ## 后续方向（讨论稿）
 
