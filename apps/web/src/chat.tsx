@@ -2,13 +2,13 @@
 import { Activity, ArrowRight, ArrowUp, Box, ChevronDown, CirclePlus, Code2, Command, CornerDownLeft, FolderClosed, LoaderCircle, MessageSquare, MessagesSquare, Plus, ShieldQuestion, Square, Terminal } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { Identity, Runtime, Session, SessionSnapshot } from './data'
+import type { ClientRuntimeOption, Identity, Session, SessionSnapshot } from './data'
 import { api, useAction } from './data'
 import { Avatar, Brand, Notice, State, statuses, timestamp } from './ui'
 
 interface SidebarProps {
   identities: Identity[]; identity?: Identity; sessions: Session[]; selected?: Session
-  runtime?: Runtime; version?: string; pending: boolean
+  runtime?: ClientRuntimeOption; pending: boolean
   selectIdentity: (id: string) => void; selectSession: (s: Session) => void
   onCreate: () => void; newSession: () => void
 }
@@ -33,7 +33,7 @@ export function Sidebar(p: SidebarProps) {
         {p.sessions.length === 0 && <div className="sessions-empty"><MessagesSquare size={21}/><span>暂无会话记录</span></div>}
       </div>
     </div>
-    <div className="side-footer"><Terminal size={16}/><span>Nexus Host</span><code>{p.version ? 'v' + p.version.replace(/^v/, '') : '—'}</code></div>
+    <a className="side-footer" href="/console/"><Terminal size={16}/>管理控制台<ArrowRight size={14}/></a>
   </>
 }
 
@@ -48,7 +48,7 @@ function WorkspaceMark() {
 interface ChatProps {
   identity?: Identity; selected?: Session; snapshot?: SessionSnapshot; loading: boolean; loadFailed: boolean
   connection: string; startSession: () => Promise<Session>; refresh: () => void
-  onCreate: () => void; onSettings: () => void
+  onCreate: () => void
 }
 export function Chat(p: ChatProps) {
   const [draft, setDraft] = useState('')
@@ -99,7 +99,7 @@ export function Chat(p: ChatProps) {
         <WorkspaceMark />
         <h2>{!p.identity ? '创建你的第一个 AI 身份' : !id ? '与 ' + p.identity.name + ' 开启对话' : '想和 ' + p.identity.name + ' 聊些什么？'}</h2>
         <p>{!p.identity ? '为它取一个名字，设定人格与工作目录。之后的每次对话，都从这个身份开始。' : !id ? '新建一个会话，在独立的上下文中与这个身份协作。' : '发送第一条消息，或选择一个任务开始。'}</p>
-        {!p.identity ? <div className="welcome-actions"><button className="primary" onClick={p.onCreate}><Plus size={16}/>创建身份</button><button className="text-btn" onClick={p.onSettings}>查看运行配置<ArrowRight size={14}/></button></div>
+        {!p.identity ? <div className="welcome-actions"><button className="primary" onClick={p.onCreate}><Plus size={16}/>创建身份</button></div>
           : !id ? <button className="primary" disabled={!ready} onClick={() => action.perform(async () => { await p.startSession() })}><Plus size={16}/>开始对话</button>
           : <div className="starters">{[
             { icon: Activity, label: '了解当前身份', text: '请介绍一下你的身份与工作方式。' },

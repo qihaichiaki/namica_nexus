@@ -1,23 +1,34 @@
 ﻿import { useCallback, useEffect, useState } from 'react'
+import type { Runtime } from '../../../packages/protocol/src/index.js'
 
-export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+export class HostRequestError extends Error {
+  constructor(readonly status: number, message: string) { super(message) }
+}
+
+export async function request(path: string, method = 'GET', body?: unknown, signal?: AbortSignal) {
   const response = await fetch('/api' + path, {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: 'no-store',
+    signal,
   })
   if (!response.ok) {
     const data = await response.json().catch(() => ({}))
-    throw new Error(data.message || data.error || `Host 返回 HTTP ${response.status}`)
+    throw new HostRequestError(response.status, data.message || data.error || `Host 返回 HTTP ${response.status}`)
   }
+  return response
+}
+
+export async function api<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+  const response = await request(path, method, body, signal)
   if (response.status === 204) return undefined as T
   return response.json()
 }
 
 // Keep one request in flight per resource, including during bursts of SSE updates.
 // A trailing request covers notifications received after the current query started.
-export function useResource<T>(path: string | null) {
+export function useResource<T>(path: string | null, load: (path: string) => Promise<T> = api<T>) {
   const [state, setState] = useState<{ path: string | null; data?: T; error?: string }>({ path: null })
   const [refresh, setRefresh] = useState<() => void>(() => () => {})
   useEffect(() => {
@@ -37,7 +48,7 @@ export function useResource<T>(path: string | null) {
       }
       loading = true
       try {
-        const data = await api<T>(path)
+        const data = await load(path)
         if (active) setState({ path, data })
       } catch (error) {
         if (active) setState(previous => ({ path, data: previous.path === path ? previous.data : undefined, error: String(error instanceof Error ? error.message : error) }))
@@ -56,7 +67,7 @@ export function useResource<T>(path: string | null) {
     setRefresh(() => schedule)
     void fetchResource()
     return () => { active = false; clearTimeout(timer) }
-  }, [path])
+  }, [path, load])
   return { data: state.path === path ? state.data : undefined, error: state.path === path ? state.error : undefined, refresh }
 }
 
@@ -78,5 +89,6 @@ export function useAction() {
   return { pending, notice, perform }
 }
 
+export type ClientRuntimeOption = Pick<Runtime, 'id' | 'type' | 'enabled'> & { isDefault: boolean }
 export type Action = ReturnType<typeof useAction>
 export type * from '../../../packages/protocol/src/index.js'
