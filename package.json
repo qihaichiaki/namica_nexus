@@ -10,10 +10,11 @@
     "dev": "concurrently -k -n host,web \"tsx watch apps/host/src/main.ts --dev\" \"vite --config apps/web/vite.config.ts\"",
     "dev:host": "tsx watch apps/host/src/main.ts --dev",
     "codex:login": "tsx apps/host/src/codex-login.ts",
-    "build": "npm run check && tsc -p tsconfig.host.json && vite build --config apps/web/vite.config.ts",
+    "build": "npm run check && tsc -p tsconfig.host.json && vite build --config apps/web/vite.config.ts && node scripts/windows/build.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
     "start": "node dist/apps/host/src/main.js",
     "test": "vitest run",
+    "test:launcher": "node tests/launcher.mjs",
     "test:live": "node tests/live-smoke.mjs"
   },
   "dependencies": {
