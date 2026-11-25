@@ -4,7 +4,7 @@
 
 ## 接手位置
 
-V0.1 和 [TASK-001](../tasks/TASK-001-windows-launch-and-shutdown.md) 已验收。Windows 构建生成根目录的 `Namica Nexus.exe`。双击打开本机管理页，Console 可以停止 Host。Client 负责身份与聊天。两个入口目前均限本机，后续范围由负责人确定。第二种 Runtime 的[连续性问题](open-questions.md)仍待讨论。
+V0.1 和 [TASK-001](../tasks/TASK-001-windows-launch-and-shutdown.md) 已验收。Windows 构建生成根目录的 `Namica Nexus.exe`。双击打开本机管理页，Console 可以停止 Host。Client 负责身份与聊天。`794e60c` 补齐 Windows 下的 Codex 自动定位。认证沿用每个数据目录独立授权一次的机制；更换账号、模型或 Runtime 时平台保留人格、历史及未来的长期记忆。[归属与生命周期](../architecture.md#所有权与扩展边界)已确认，原生线程失效后的[上下文重建设计](open-questions.md)待细化。
 
 TASK-001 在 Node 24.22.3、npm 10.9.3 下通过生产构建、26 项自动化回归、7 组启动器场景及仓外集成验证。实际 Host 与原生启动器的并发复用、后台任务与关停恢复、无头浏览器和真实 Codex 的验证边界见[任务验收记录](../tasks/TASK-001-windows-launch-and-shutdown.md#验收记录)。
 
