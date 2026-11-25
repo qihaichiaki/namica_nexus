@@ -76,7 +76,7 @@ try {
     return snapshot
   }
   const stream = await openFeed()
-  await request(path + '/messages', { content: 'Inspect fixture.js in this workspace using a tool. Tell me its exact console output. Do not modify files.' })
+  await request(path + '/messages', { content: 'Read fixture.js in the current workspace and tell me its exact console output. On Windows, use Get-Content -LiteralPath ./fixture.js. If the sandbox cannot start the shell, request native approval for that single read. Do not modify files.' })
   // Receive at least one session-specific invalidation, then close the client mid-turn.
   const eventDeadline = setTimeout(() => feed.abort(), 30000)
   try {
@@ -93,7 +93,8 @@ try {
   }
   let snapshot = await until(get, s => s.session.status !== 'running')
   assert.equal(snapshot.session.status, 'completed', snapshot.turns.at(-1)?.error)
-  assert.ok(snapshot.messages.at(-1).content.includes('fixture-' + marker), 'expected code fixture value')
+  const toolResults = snapshot.tools.map(tool => [tool.status, tool.detail].filter(Boolean).join(' ')).join(', ')
+  assert.ok(snapshot.messages.at(-1).content.includes('fixture-' + marker), 'expected code fixture value; tools: ' + toolResults)
   assert.ok(snapshot.messages.at(-1).content.includes('NEXUS-READY'), 'expected injected personality')
   assert.ok(snapshot.tools.length > 0, 'expected native tool activity')
   assert.equal(await readFile(join(workspace, 'fixture.js'), 'utf8'), 'console.log("fixture-' + marker + '")\n')

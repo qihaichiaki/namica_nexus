@@ -13,7 +13,12 @@ function safeLabel(value: unknown): value is string {
 
 const requestFields = new Set(['threadId', 'turnId', 'itemId', 'startedAtMs', 'reason'])
 const commandFields = new Set([...requestFields, 'kind', 'command', 'cwd', 'commandActions', 'approvalId',
-  'proposedExecpolicyAmendment', 'proposedNetworkPolicyAmendments'])
+  'proposedExecpolicyAmendment', 'proposedNetworkPolicyAmendments', 'environmentId', 'availableDecisions'])
+
+function negativeDecision(choices: unknown): 'decline' | 'cancel' | undefined {
+  if (choices == null || (Array.isArray(choices) && choices.includes('decline'))) return 'decline'
+  if (Array.isArray(choices) && choices.includes('cancel')) return 'cancel'
+}
 
 function knownScope(params: Fields, supported: Set<string>): boolean {
   // A server upgrade may attach extra filesystem, network or environment permissions.
@@ -21,10 +26,15 @@ function knownScope(params: Fields, supported: Set<string>): boolean {
   return Object.entries(params).every(([key, value]) => value == null || supported.has(key))
 }
 
-function deny(rpc: Rpc, method: unknown, id: RequestId) {
+function deny(rpc: Rpc, method: unknown, id: RequestId, choices?: unknown) {
+  const negative = negativeDecision(choices)
+  if (method === 'item/commandExecution/requestApproval' && !negative) {
+    rpc.send({ id, error: { code: -32602, message: 'No supported denial decision' } })
+    return
+  }
   const results: Record<string, Fields> = {
     'item/permissions/requestApproval': { permissions: {}, scope: 'turn' },
-    'item/commandExecution/requestApproval': { decision: 'decline' },
+    'item/commandExecution/requestApproval': { decision: negative },
     'item/fileChange/requestApproval': { decision: 'decline' },
     'mcpServer/elicitation/request': { action: 'decline', content: null, _meta: null },
     execCommandApproval: { decision: 'denied' },
@@ -60,7 +70,7 @@ class CodexTurn implements AgentRun {
   private cancelling = false
   private cancelTimer?: NodeJS.Timeout
   private interruptRetry?: NodeJS.Timeout
-  private readonly approvals = new Map<string, RequestId>()
+  private readonly approvals = new Map<string, { requestId: RequestId; negative: 'decline' | 'cancel' }>()
   private readonly texts = new Map<string, string>()
   private readonly files = new Map<string, string>()
 
@@ -117,25 +127,29 @@ class CodexTurn implements AgentRun {
     if (typeof requestId === 'string' || typeof requestId === 'number') {
       if (ownThread && this.turnId && this.turnId === p.turnId && !this.cancelling) {
         let label = ''
+        const choices = p.availableDecisions
+        const negative = negativeDecision(choices)
         if (method === 'item/commandExecution/requestApproval' && (!p.kind || p.kind === 'command')
+            && (p.environmentId == null || p.environmentId === 'local')
+            && (choices == null || (Array.isArray(choices) && choices.includes('accept')))
             && knownScope(p, commandFields) && safeLabel(p.command) && safeLabel(p.cwd)) {
           label = [p.command, p.cwd, summary(p.reason)].filter(Boolean).join('\n')
         }
         if (method === 'item/fileChange/requestApproval' && knownScope(p, requestFields) && this.files.has(stringValue(p.itemId))) {
           label = ['Edit ' + this.files.get(stringValue(p.itemId)), summary(p.reason)].filter(Boolean).join('\n')
         }
-        if (label) {
+        if (label && negative) {
           const approvalId = randomUUID()
-          this.approvals.set(approvalId, requestId)
+          this.approvals.set(approvalId, { requestId, negative })
           this.publish({ type: 'approval.requested', approvalId, label })
           return
         }
       }
-      return deny(this.rpc, method, requestId)
+      return deny(this.rpc, method, requestId, p.availableDecisions)
     }
     if (!ownThread) return
     if (method === 'serverRequest/resolved') {
-      for (const [key, id] of this.approvals) if (id === p.requestId) this.clearApproval(key)
+      for (const [key, pending] of this.approvals) if (pending.requestId === p.requestId) this.clearApproval(key)
       return
     }
     const turn = fields(p.turn)
@@ -180,9 +194,9 @@ class CodexTurn implements AgentRun {
   }
 
   respondApproval(approvalId: string, allow: boolean) {
-    const id = this.approvals.get(approvalId)
-    if (id === undefined || this.ended) return false
-    this.rpc.send({ id, result: { decision: allow ? 'accept' : 'decline' } })
+    const pending = this.approvals.get(approvalId)
+    if (!pending || this.ended) return false
+    this.rpc.send({ id: pending.requestId, result: { decision: allow ? 'accept' : pending.negative } })
     this.clearApproval(approvalId)
     return true
   }
