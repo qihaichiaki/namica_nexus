@@ -1,6 +1,7 @@
 # Namica Nexus 开发协作
 
 - 新 Agent 先用 `git status --short --branch` 核对工作区。接手全项目、没有单独指定角色时，按 **Architect Agent** 身份从 [架构师接手指南](docs/architect/working-guide.md) 开始，核对工程基线并接续当前讨论。被指派实现具体开发任务时按 **Developer Agent** 身份工作，阅读任务文件、相关源码和任务引用的约束。安装与运行见 [README](README.md)。使用英文命名代码，讨论和阶段文档可用中文。
+- Architect 在已确认的任务范围、已授权服务和预算内调度 Developer。派发 Codex Developer 时，请按任务显式选择可用模型与推理档位。Developer 只在分配的范围内工作，再委派须有 Architect 对该子任务和预算的明确授权。所有 Agent 默认用命令行或 Agent 接口，控制负责人的桌面前须说明窗口、动作与原因并取得同意。
 - V0.1 的范围是 Windows 本地 Web Client、独立 Host、SQLite 和真实 Codex Runtime。Client 仅访问 Host。第三方协议的进程、消息和事件转换由 Adapter 处理，Identity 与 Session 使用平台自己的标识。
 - 用户消息先持久化再提交。每个会话只运行一个 Turn。网页断开时任务继续运行，进程异常时保留部分回复及真实状态。变更这些行为时补回归测试。
 - 使用仓库锁文件安装依赖。提交前执行 `npm test` 和 `npm run build`。涉及 Runtime 协议的变更还应以本机版本在源码目录外验证，记录实际版本及限制。Mock 仅用于自动化测试。
