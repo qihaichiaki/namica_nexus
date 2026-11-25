@@ -2,7 +2,7 @@
 import { createRoot } from 'react-dom/client'
 import { AudioLines, Blocks, Cable, MessageSquare, PanelLeftOpen, X } from 'lucide-react'
 import { api, useAction, useResource } from './data'
-import type { ClientRuntimeOption, HostEvent, Identity, Session, SessionSnapshot } from './data'
+import type { RuntimeOption, HostEvent, Identity, Session, SessionSnapshot } from './data'
 import { Brand, Notice } from './ui'
 import { Chat, Sidebar } from './chat'
 import { Agents } from './agents'
@@ -30,7 +30,7 @@ function App() {
   const [createAgent, setCreateAgent] = useState(false)
   const identities = useResource<Identity[]>('/identities')
   const sessions = useResource<Session[]>('/sessions')
-  const runtimes = useResource<ClientRuntimeOption[]>('/runtime-options')
+  const runtimes = useResource<RuntimeOption[]>('/runtime-options')
   const identity = identities.data?.find(item => item.id === identityId) ?? identities.data?.[0]
   const list = (sessions.data ?? []).filter(item => item.identityId === identity?.id)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))

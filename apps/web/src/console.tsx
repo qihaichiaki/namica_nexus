@@ -8,12 +8,6 @@ import { Brand, Modal, Notice } from './ui'
 import './shared.css'
 import './console.css'
 
-type ManagedHostStatus = HostStatus & {
-  service: 'namica-nexus'
-  instanceId: string
-  activeTurns: number
-}
-
 const statusPath = '/manage/host/status'
 const pollInterval = 2000
 const requestTimeout = 4000
@@ -23,12 +17,18 @@ function loadConsoleResource<T>(path: string) {
 }
 
 async function readHostStatus() {
-  const status = await loadConsoleResource<ManagedHostStatus>(statusPath)
+  const status = await loadConsoleResource<HostStatus>(statusPath)
   if (status?.service !== 'namica-nexus' || !status.instanceId || status.status !== 'running' ||
       !Number.isInteger(status.activeTurns) || status.activeTurns < 0) {
     throw new Error('无法确认此端口上的 Namica Nexus Host。')
   }
   return status
+}
+
+async function pollHostStatus() {
+  const startedAt = performance.now()
+  const host = await readHostStatus()
+  return { host, startedAt }
 }
 
 function formatUptime(seconds: number) {
@@ -38,7 +38,7 @@ function formatUptime(seconds: number) {
   return Math.floor(minutes / 60) + ' 小时 ' + minutes % 60 + ' 分钟'
 }
 
-function HostFacts({ host }: { host: ManagedHostStatus }) {
+function HostFacts({ host }: { host: HostStatus }) {
   return <dl className="facts">
     <div><dt>活动任务</dt><dd><strong>{host.activeTurns}</strong> 个</dd></div>
     <div><dt>Host 版本</dt><dd><code>{host.version}</code></dd></div>
@@ -76,17 +76,21 @@ function ConsoleSettings({ refreshStatus }: { refreshStatus: () => void }) {
   </>
 }
 
-type Confirmation = Pick<ManagedHostStatus, 'instanceId' | 'activeTurns'> & { changed?: string }
+type Confirmation = Pick<HostStatus, 'instanceId' | 'activeTurns'> & { changed?: string }
 
 function Console() {
-  const status = useResource<ManagedHostStatus>(statusPath, readHostStatus)
+  const status = useResource(statusPath, pollHostStatus)
   const latest = status.error ? undefined : status.data
-  const [acceptedInstance, setAcceptedInstance] = useState<string>()
+  const host = latest?.host
+  const [acceptedShutdown, setAcceptedShutdown] = useState<{ instanceId: string; acceptedAt: number }>()
   const [confirmation, setConfirmation] = useState<Confirmation>()
   const shutdown = useAction()
 
-  const accepted = Boolean(acceptedInstance && (!latest || latest.instanceId === acceptedInstance))
-  const running = Boolean(latest && !accepted)
+  // A poll from before the acknowledgement can still describe a previous Host.
+  const restarted = Boolean(acceptedShutdown && latest &&
+    latest.startedAt > acceptedShutdown.acceptedAt && latest.host.instanceId !== acceptedShutdown.instanceId)
+  const accepted = Boolean(acceptedShutdown && !restarted)
+  const running = Boolean(host && !accepted)
   const connection = accepted ? 'accepted' : running ? 'online' : status.error ? 'offline' : 'connecting'
   const serviceLabel = accepted ? '关停请求已受理' : running ? '运行中' :
     status.error ? status.data ? '连接中断' : '无法连接 Host' : '正在连接 Host…'
@@ -102,8 +106,8 @@ function Console() {
     }
   }, [status.refresh])
   useEffect(() => {
-    if (latest && acceptedInstance && latest.instanceId !== acceptedInstance) setAcceptedInstance(undefined)
-  }, [latest, acceptedInstance])
+    if (restarted) setAcceptedShutdown(undefined)
+  }, [restarted])
 
   const prepareShutdown = () => void shutdown.perform(async () => {
     try {
@@ -120,7 +124,7 @@ function Console() {
     try {
       const response = await request('/manage/host/shutdown', 'POST', { instanceId, activeTurns }, AbortSignal.timeout(requestTimeout))
       if (response.status !== 202) throw new Error('Host 未确认关停请求。')
-      setAcceptedInstance(instanceId)
+      setAcceptedShutdown({ instanceId, acceptedAt: performance.now() })
       setConfirmation(undefined)
     } catch (error) {
       if (!(error instanceof HostRequestError) || error.status !== 409) throw error
@@ -151,12 +155,12 @@ function Console() {
             </button>
           </div>
         </div>
-        {running && latest && <HostFacts host={latest}/>}
+        {running && host && <HostFacts host={host}/>}
         {accepted && <p className="console-feedback">双击 Namica Nexus 可重新启动服务，此页面会自动连接。</p>}
         {!accepted && status.error && <p className="console-feedback">{status.error} 页面会自动重试连接。</p>}
         {!confirmation && shutdown.notice && <div className="console-feedback"><Notice notice={shutdown.notice}/></div>}
       </SettingsSection>
-      {running && latest && <ConsoleSettings key={latest.instanceId} refreshStatus={status.refresh}/>}
+      {running && host && <ConsoleSettings key={host.instanceId} refreshStatus={status.refresh}/>}
     </main>
     {confirmation && <Modal title="停止服务？" pending={shutdown.pending} close={() => setConfirmation(undefined)}>
       <div className="form-body shutdown-copy">

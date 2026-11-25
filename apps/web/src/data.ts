@@ -1,5 +1,4 @@
 ﻿import { useCallback, useEffect, useState } from 'react'
-import type { Runtime } from '../../../packages/protocol/src/index.js'
 
 export class HostRequestError extends Error {
   constructor(readonly status: number, message: string) { super(message) }
@@ -89,6 +88,5 @@ export function useAction() {
   return { pending, notice, perform }
 }
 
-export type ClientRuntimeOption = Pick<Runtime, 'id' | 'type' | 'enabled'> & { isDefault: boolean }
 export type Action = ReturnType<typeof useAction>
 export type * from '../../../packages/protocol/src/index.js'

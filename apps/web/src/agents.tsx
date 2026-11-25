@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { ArrowRight, Blocks, Box, Folder, LoaderCircle, Pencil, Plus } from 'lucide-react'
 import type { FormEvent } from 'react'
-import type { ClientRuntimeOption, Identity, Session } from './data'
+import type { RuntimeOption, Identity, Session } from './data'
 import { api, useAction } from './data'
 import { Avatar, Field, Modal, Notice, State } from './ui'
 
 interface EditorProps {
-  identity?: Identity; runtimes: ClientRuntimeOption[]; close: () => void; saved: () => void
+  identity?: Identity; runtimes: RuntimeOption[]; close: () => void; saved: () => void
 }
 function IdentityEditor({ identity, runtimes, close, saved }: EditorProps) {
   const action = useAction()
@@ -34,7 +34,7 @@ function IdentityEditor({ identity, runtimes, close, saved }: EditorProps) {
 }
 
 interface AgentsProps {
-  identities?: Identity[]; sessions: Session[]; runtimes: ClientRuntimeOption[]
+  identities?: Identity[]; sessions: Session[]; runtimes: RuntimeOption[]
   newRequested: boolean; clearRequest: () => void; refresh: () => void; chat: (id: string) => void
 }
 export function Agents(p: AgentsProps) {

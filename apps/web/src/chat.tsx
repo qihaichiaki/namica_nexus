@@ -2,13 +2,13 @@
 import { Activity, ArrowRight, ArrowUp, Box, ChevronDown, CirclePlus, Code2, Command, CornerDownLeft, FolderClosed, LoaderCircle, MessageSquare, MessagesSquare, Plus, ShieldQuestion, Square, Terminal } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { ClientRuntimeOption, Identity, Session, SessionSnapshot } from './data'
+import type { RuntimeOption, Identity, Session, SessionSnapshot } from './data'
 import { api, useAction } from './data'
 import { Avatar, Brand, Notice, State, statuses, timestamp } from './ui'
 
 interface SidebarProps {
   identities: Identity[]; identity?: Identity; sessions: Session[]; selected?: Session
-  runtime?: ClientRuntimeOption; pending: boolean
+  runtime?: RuntimeOption; pending: boolean
   selectIdentity: (id: string) => void; selectSession: (s: Session) => void
   onCreate: () => void; newSession: () => void
 }
