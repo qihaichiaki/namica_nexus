@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { access, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -60,6 +60,12 @@ try {
   const authFile = join(source, 'codex-home', 'auth.json')
   await mkdir(join(source, 'codex-home'), {recursive: true})
   await writeFile(authFile, 'SYNTHETIC FILE ONLY')
+  await copyFile(new URL('./fixtures/codex-account.cjs', import.meta.url), join(source, 'app-server'))
+  await writeFile(join(source, 'codex-home', 'synthetic-account'), 'fixture')
+  assert.equal((await get(old, '/api/manage/runtimes/codex', 'PATCH', {executable: process.execPath})).status, 200)
+  const account = '/api/manage/auth/codex'
+  assert.equal((await (await get(old, account + '/login', 'POST', {method: 'device'})).json()).state, 'pending')
+  const loginProcess = Number(await readFile(join(source, 'account-pid'), 'utf8'))
   const restart = '/api/manage/host/restart', deploy = '/api/manage/deployment'
   const confirmation = {instanceId: status.instanceId, activeTurns: 0}
   assert.equal((await get(old, restart, 'POST', {activeTurns: 0})).status, 400)
@@ -84,6 +90,7 @@ try {
   const current = await waitStatus(next)
   assert.notEqual(current.instanceId, status.instanceId)
   assert.equal(current.dataDirectory, target)
+  assert.throws(() => process.kill(loginProcess, 0))
   const confirm = await get(next, receipts + receipt.restartId, 'GET', undefined, {Origin: old, 'sec-fetch-site': 'cross-site'})
   assert.equal(confirm.headers.get('access-control-allow-origin'), old)
   assert.deepEqual(await confirm.json(), {status: 'ready', consoleUrl: next + '/console/', instanceId: current.instanceId})
@@ -92,6 +99,13 @@ try {
   assert.equal((await (await get(next, '/api/identities')).json())[0].id, id)
   assert.equal(await readFile(join(target, 'codex-home', 'auth.json'), 'utf8'), 'SYNTHETIC FILE ONLY')
   assert.equal(await readFile(authFile, 'utf8'), 'SYNTHETIC FILE ONLY')
+  const cli = spawn(process.execPath, [resolve('dist/apps/host/src/codex-login.js'), 'status'], {env, cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']})
+  let summary = ''
+  cli.stdout.on('data', chunk => { summary += chunk })
+  cli.stderr.on('data', chunk => { summary += chunk })
+  assert.equal((await once(cli, 'exit'))[0], 0, summary)
+  assert.match(summary, /已登录.*ChatGPT/)
+  console.log('PASS running CLI status follows the migrated deployment and pending authorization drains on restart')
   console.log('PASS production IPv4→IPv6 restart, instance/tasks/settings guards, private receipt, identity/login copy and backup')
 
   // Saving now and stopping must apply on the next ordinary start. Introduce an unrelated file after save.

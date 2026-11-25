@@ -11,7 +11,9 @@ import type { HostEvent, HostStatus, Runtime, RuntimeOption } from '../../../pac
 import { HttpError, Store } from './store.js'
 import { Tasks } from './tasks.js'
 import { codexHomeFor, resolveDataDirectory } from './paths.js'
-
+import { ConsoleCodexAuth } from './console-auth.js'
+import { Diagnostics } from './diagnostics.js'
+import { browseDirectories } from './directories.js'
 import { consoleUrl, deploymentSchema, probeEndpoint, type DeploymentProfile, type Deployment, type RestartTicket } from './deployment.js'
 import { validateMigration } from './migration.js'
 
@@ -64,6 +66,9 @@ export async function buildHost(options: HostOptions = {}) {
     forceCloseConnections: true,
     logController: new Fastify.LogController({disableRequestLogging: true}),
   })
+  const diagnostics = new Diagnostics(app.log)
+  diagnostics.record('hostStarted')
+  app.addHook('onListen', async () => diagnostics.record('hostListening'))
   const codexAdapter = createCodexAdapter(codexHomeFor(dataDirectory))
   const adapterFor = options.adapterFactory ?? ((runtime: Runtime) => {
     if (runtime.type !== codexAdapter.type) throw new HttpError(400, 'Unknown runtime type.')
@@ -93,11 +98,30 @@ export async function buildHost(options: HostOptions = {}) {
       pendingEvents.clear()
     }, 35)
   }
-  const tasks = new Tasks(store, adapterFor, publish, app.log)
+  const checkShutdown = new AbortController()
+  const checks = new Map<string, Promise<Runtime>>()
+  const codexAuth = new ConsoleCodexAuth(codexHomeFor(dataDirectory), dataDirectory, () => store.runtime('codex'), () => {
+    if (tasks.hasRuntimeTurns('codex')) return 'Codex 正在执行任务，任务结束后再管理登录。'
+    if (checks.has('codex')) return 'Codex 正在检测，检测完成后再管理登录。'
+  }, diagnostics, () => {
+    const runtime = store.runtime('codex')
+    store.saveRuntime({...runtime, available: null, version: null, detail: ''})
+    publish({ type: 'runtimes.changed' })
+  })
+  const assertRuntimeAuthIdle = (runtime: Runtime) => {
+    if (runtime.type === 'codex' && codexAuth.changingAccount) {
+      throw new HttpError(409, 'Codex 正在处理登录操作，请先完成或取消授权。')
+    }
+  }
+  const tasks = new Tasks(store, adapterFor, publish, diagnostics, assertRuntimeAuthIdle)
   let stoppedTasks: Promise<void> | undefined
   function stopTasks() {
     closing = true
-    return stoppedTasks ??= tasks.stop().catch(error => app.log.error({err: error}, 'Unable to stop Host turns'))
+    if (!stoppedTasks) {
+      diagnostics.record('hostStopping')
+      stoppedTasks = tasks.stop().catch(() => diagnostics.record('shutdownFailed'))
+    }
+    return stoppedTasks
   }
   const port = () => {
     const listening = app.server.address()
@@ -105,11 +129,15 @@ export async function buildHost(options: HostOptions = {}) {
   }
   const active = (): Deployment => ({address, port: port(), dataDirectory})
   const ticket = options.restartResult
+  if (ticket) diagnostics.record(ticket.status === 'ready' ? 'restartCompleted' : 'restartReverted')
   app.addHook('onRequest', async (request, reply) => {
     const host = request.headers.host
     const names = address === '::1' ? ['[::1]', '[0000:0000:0000:0000:0000:0000:0000:0001]', 'localhost'] : [address, 'localhost']
     const addresses = names.map(name => port() === 80 ? name : name + ':' + port())
-    if (!host || !addresses.includes(host)) throw new HttpError(403, 'Unrecognized Host.')
+    if (!host || !addresses.includes(host)) {
+      diagnostics.record('unrecognizedHost')
+      throw new HttpError(403, 'Unrecognized Host.')
+    }
     const origin = request.headers.origin
     const devOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173']
     const devRequest = options.dev && origin !== undefined && devOrigins.includes(origin)
@@ -117,7 +145,10 @@ export async function buildHost(options: HostOptions = {}) {
       request.url === '/api/manage/host/restart-result/' + ticket.id && origin === ticket.origin
     if (receipt) reply.header('Access-Control-Allow-Origin', ticket.origin).header('Vary', 'Origin')
     if (!receipt && ((origin !== undefined && origin !== 'http://' + host && !devRequest) ||
-        (request.headers['sec-fetch-site'] === 'cross-site' && !devRequest))) throw new HttpError(403, 'Unrecognized Origin.')
+        (request.headers['sec-fetch-site'] === 'cross-site' && !devRequest))) {
+      diagnostics.record('unrecognizedOrigin')
+      throw new HttpError(403, 'Unrecognized Origin.')
+    }
     assertOpen()
     reply.header('X-Content-Type-Options', 'nosniff')
     reply.header('Referrer-Policy', 'no-referrer')
@@ -134,7 +165,7 @@ export async function buildHost(options: HostOptions = {}) {
   app.setErrorHandler((error: Error & {statusCode?: number}, _request, reply) => {
     if (error instanceof z.ZodError) return reply.code(400).send({error: error.issues.map(i => i.path.join('.') + ' ' + i.message).join(', ')})
     const status = error.statusCode ?? 500
-    if (status >= 500) app.log.error({err: error}, 'Host request failed')
+    if (status >= 500) diagnostics.record('requestFailed')
     return reply.code(status).send({error: status >= 500 ? 'Host request failed.' : error.message})
   })
 
@@ -147,13 +178,16 @@ export async function buildHost(options: HostOptions = {}) {
   app.patch('/api/manage/host/config', req => {
     const config = store.saveConfig({...store.config(), ...configPatch.parse(req.body)})
     app.log.level = config.logLevel
+    diagnostics.record('hostConfigUpdated')
     publish({type: 'config.changed'})
     return config
   })
   app.get('/api/manage/deployment', () => options.deployment?.read() ?? {active: active(), pending: active()})
   app.patch('/api/manage/deployment', req => {
     if (!options.deployment) throw new HttpError(409, '此 Host 未启用部署配置。')
-    return options.deployment.save(active(), req.body)
+    const state = options.deployment.save(active(), req.body)
+    diagnostics.record('deploymentSaved')
+    return state
   })
   app.get<{Params: {id: string}}>('/api/manage/host/restart-result/:id', req => {
     if (!ticket || req.params.id !== ticket.id || Date.now() >= ticket.expires) throw new HttpError(404, '重启结果已过期。')
@@ -178,11 +212,12 @@ export async function buildHost(options: HostOptions = {}) {
     if (target.port !== port() || target.address !== address) await probeEndpoint(target)
     checkInstance(expected)
     if (JSON.stringify(target) !== JSON.stringify(profile.read().pending)) throw new HttpError(409, '启动设置已更改，请重新确认。')
+    diagnostics.record('restartRequested')
     const id = randomUUID()
     const origin = req.headers.origin ?? new URL(consoleUrl(active())).origin
     reply.raw.once('close', () => {
       void app.close().then(() => restart({id, origin, status: 'ready', expires: Date.now() + 300_000}))
-        .catch(error => app.log.error({err: error}, 'Host restart failed'))
+        .catch(() => diagnostics.record('restartFailed'))
     })
     void stopTasks()
     return reply.code(202).send({consoleUrl: consoleUrl(target), restartId: id})
@@ -191,15 +226,26 @@ export async function buildHost(options: HostOptions = {}) {
     checkInstance(shutdownRequest.parse(req.body))
     // Close after the response is written or its connection is lost.
     reply.raw.once('close', () => {
-      void app.close().catch(error => app.log.error({err: error}, 'Host shutdown failed'))
+      void app.close().catch(() => diagnostics.record('shutdownFailed'))
     })
     void stopTasks()
     return reply.code(202).send({ok: true})
   })
 
+  app.get('/api/manage/logs', () => diagnostics.recent())
+  app.get('/api/manage/directories', req => {
+    const { path } = z.object({ path: text(32767).optional() }).parse(req.query)
+    return browseDirectories(path)
+  })
+  app.get('/api/manage/auth/codex', () => codexAuth.read())
+  app.post('/api/manage/auth/codex/login', req => {
+    const { method } = z.strictObject({ method: z.enum(['browser', 'device']).default('browser') }).parse(req.body ?? {})
+    return codexAuth.login(method)
+  })
+  app.post('/api/manage/auth/codex/cancel', () => codexAuth.cancel())
+  app.post('/api/manage/auth/codex/logout', () => codexAuth.logout())
+
   type IdRoute = { Params: {id: string} }
-  const checkShutdown = new AbortController()
-  const checks = new Map<string, Promise<Runtime>>()
   app.get('/api/runtime-options', (): RuntimeOption[] => {
     const { defaultRuntimeId } = store.config()
     return store.runtimes().map(({id, type, enabled}) => ({id, type, enabled, isDefault: id === defaultRuntimeId}))
@@ -207,8 +253,12 @@ export async function buildHost(options: HostOptions = {}) {
   app.get('/api/manage/runtimes', () => store.runtimes().map(r => tasks.runtimeState(r)))
   app.patch<IdRoute>('/api/manage/runtimes/:id', req => {
     const runtime = tasks.runtimeState(store.runtime(req.params.id))
-    if (checks.has(runtime.id) || runtime.processState === 'running') throw new HttpError(409, 'Runtime is busy.')
+    if (checks.has(runtime.id) || runtime.processState === 'running' || (runtime.type === 'codex' && codexAuth.busy)) {
+      throw new HttpError(409, 'Runtime is busy.')
+    }
     const result = store.saveRuntime({...runtime, ...runtimePatch.parse(req.body), version: null, available: null, detail: ''})
+    if (runtime.type === 'codex') codexAuth.reset()
+    diagnostics.record('runtimeConfigUpdated')
     publish({type: 'runtimes.changed'})
     return result
   })
@@ -221,11 +271,14 @@ export async function buildHost(options: HostOptions = {}) {
       result = {available: false, version: null, detail: err instanceof Error ? err.message : 'Check failed.'}
     }
     assertOpen()
+    diagnostics.record(result.available ? 'runtimeCheckPassed' : 'runtimeCheckFailed')
     return tasks.runtimeState(store.saveRuntime({...runtime, ...result}))
   }
   app.post<IdRoute>('/api/manage/runtimes/:id/check', async req => {
     const runtime = store.runtime(req.params.id)
     if (checks.has(runtime.id)) throw new HttpError(409, 'Check already in progress.')
+    assertRuntimeAuthIdle(runtime)
+    diagnostics.record('runtimeCheckStarted')
     const result = checkRuntime(runtime)
     checks.set(runtime.id, result)
     try {
@@ -300,7 +353,7 @@ export async function buildHost(options: HostOptions = {}) {
     pendingEvents.clear()
     for (const client of clients) client.end()
     checkShutdown.abort()
-    await Promise.allSettled([stopped, ...checks.values()])
+    await Promise.allSettled([stopped, codexAuth.stop(), ...checks.values()])
   })
   app.addHook('onClose', async () => store.close())
   return app

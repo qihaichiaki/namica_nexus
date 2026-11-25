@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs'
-import type { FastifyBaseLogger } from 'fastify'
 import type { AgentAdapter, AgentEvent, AgentRun } from '../../../packages/agent-core/src/index.js'
 import type { Approval, HostEvent, Runtime, Turn, TurnStatus } from '../../../packages/protocol/src/index.js'
+import type { DiagnosticEvent, Diagnostics } from './diagnostics.js'
 import { HttpError, Store } from './store.js'
 
 interface ActiveTurn {
@@ -14,6 +14,10 @@ interface ActiveTurn {
   settled?: Promise<void>
 }
 
+const turnEnded: Record<Exclude<TurnStatus, 'running'>, DiagnosticEvent> = {
+  completed: 'turnCompleted', cancelled: 'turnCancelled', failed: 'turnFailed', interrupted: 'turnInterrupted',
+}
+
 export class Tasks {
   private active = new Map<string, ActiveTurn>()
   private closing = false
@@ -21,13 +25,18 @@ export class Tasks {
     private store: Store,
     private adapterFor: (runtime: Runtime) => AgentAdapter,
     private publish: (event: HostEvent) => void,
-    private log: FastifyBaseLogger,
+    private diagnostics: Diagnostics,
+    private assertRuntimeReady: (runtime: Runtime) => void,
   ) {}
 
   get activeTurns() { return this.active.size }
 
+  hasRuntimeTurns(runtimeId: string) {
+    return [...this.active.values()].some(task => task.runtimeId === runtimeId)
+  }
+
   runtimeState(runtime: Runtime): Runtime {
-    const running = [...this.active.values()].some(task => task.runtimeId === runtime.id)
+    const running = this.hasRuntimeTurns(runtime.id)
     return { ...runtime, processState: running ? 'running' : 'idle' }
   }
   snapshot(id: string) {
@@ -40,12 +49,13 @@ export class Tasks {
     const session = this.store.storedSession(sessionId)
     const runtime = this.store.runtime(session.runtimeConfigId)
     if (!runtime.enabled) throw new HttpError(409, 'The configured runtime is disabled.')
+    this.assertRuntimeReady(runtime)
     const adapter = this.adapterFor(runtime)
     const timeoutSeconds = this.store.config().executionTimeoutSeconds
     const turn = this.store.beginTurn(sessionId, message)
     const task: ActiveTurn = { turn, runtimeId: runtime.id, approvals: new Map() }
     this.active.set(sessionId, task)
-    this.log.info({ sessionId, turnId: turn.turnId, runtimeId: runtime.id }, 'Turn accepted')
+    this.diagnostics.record('turnAccepted')
     this.changed(sessionId)
     this.publish({type: 'runtimes.changed'})
     try {
@@ -79,7 +89,7 @@ export class Tasks {
     switch (event.type) {
       case 'session.ready':
         this.store.mapSession(sessionId, event.runtimeSessionId)
-        this.log.debug({ sessionId, turnId }, 'Runtime session ready')
+        this.diagnostics.record('turnReady')
         break
       case 'message.updated': this.store.writeReply(turnId, event.content); break
       case 'approval.requested':
@@ -102,9 +112,7 @@ export class Tasks {
     if (task.stopping === 'shutdown') { result = 'interrupted'; reason = 'Host shut down during this turn.' }
     this.store.finish(task.turn, result, reason)
     this.active.delete(task.turn.sessionId)
-    const context = { sessionId: task.turn.sessionId, turnId: task.turn.turnId, status: result }
-    if (result === 'failed' || result === 'interrupted') this.log.warn(context, 'Turn ended')
-    else this.log.info(context, 'Turn ended')
+    this.diagnostics.record(task.stopping === 'timeout' ? 'turnTimedOut' : turnEnded[result])
     this.changed(task.turn.sessionId)
     this.publish({type: 'runtimes.changed'})
   }
