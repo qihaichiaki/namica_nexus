@@ -67,6 +67,7 @@ Host 绑定 IPv4 回环地址并校验 Host 和 Origin。个人电脑上的其�
 
 ## 开发文档
 
+- [架构师工作入口](docs/architect/working-guide.md) · [源码与验证基线](docs/architect/current-state.md) · [待负责人讨论的问题](docs/architect/open-questions.md)
 - [实际架构与接口](docs/architecture.md)
 - [本机 Codex 协议与验证记录](docs/runtime-verification.md)
 - [进度和已知问题](docs/progress.md) · [开发交接报告](docs/handoff.md)

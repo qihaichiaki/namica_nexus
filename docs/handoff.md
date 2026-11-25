@@ -1,5 +1,7 @@
 # Namica Nexus — Development Handoff
 
+本报告保留 V0.1 交付时的环境与实测结论。新 Architect 从[工作入口](architect/working-guide.md)恢复，当前讨论见[待讨论事项](architect/open-questions.md)。
+
 ## 1. 基础信息
 
 2026-11-25 · v0.1.0 · MVP 验收后的本地配置与隐私更新 · Git 分支 `main`。上一阶段验收报告提交为 `2e8fbb3`。Git 使用开发机已配置的作者与提交者身份。

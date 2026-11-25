@@ -1,6 +1,6 @@
 # Namica Nexus V0.1 架构
 
-V0.1 部署在个人 Windows PC 上。一个 Host 进程持有本地业务数据和正在执行的任务。Web Client 与 Codex 子进程可以分别关闭和重新连接。模型推理使用 Codex 已配置的原生服务。启动、登录与配置示例见 [README](../README.md)。
+V0.1 部署在个人 Windows PC 上。一个 Host 进程持有本地业务数据和正在执行的任务。Web Client 可以断开重连；每轮 Codex 子进程退出后，下一轮用新进程恢复原生线程。模型推理使用 Codex 已配置的原生服务。启动、登录与配置示例见 [README](../README.md)。
 
 ```mermaid
 flowchart LR
@@ -36,7 +36,7 @@ Host 相对于启动工作目录解析 `data/`，也可由 `NEXUS_DATA_DIR` 覆�
 | --- | --- |
 | hostConfig、runtimes | 保存 Host 配置及 Runtime 的启用状态、可执行文件、默认模型、工作区和最近一次可用性检测。进程状态根据活动任务计算。 |
 | identities | 永久 UUID、名称、描述、头像、人格文本及版本、Runtime 配置、默认工作区和时间。更改注入指令用到的名称、描述、人格会增加版本。 |
-| sessions | 平台会话 ID、identityId、runtimeConfigId、第三方 runtimeSessionId、人格版本、指令快照、解析后的工作区、标题、状态和时间。 |
+| sessions | 平台会话 ID、identityId、runtimeConfigId、第三方 runtimeSessionId、人格版本、指令快照、工作区路径（空串表示随数据目录解析的默认工作区）、标题、状态和时间。 |
 | turns | 每次发送的 UUID、所属会话、执行状态和失败原因。部分唯一索引约束每个会话只能有一个 running Turn。 |
 | messages | 用户原文及助手正文分别存储，包含所属会话与 Turn、角色、时间、状态和会话内唯一 sequence。流式阶段持续更新同一条助手消息。 |
 | tools | Turn 内的工具项 ID、描述、状态、可用的执行结果摘要。 |
@@ -45,7 +45,7 @@ Host 相对于启动工作目录解析 `data/`，也可由 `NEXUS_DATA_DIR` 覆�
 
 ## 一次对话
 
-1. 客户端发送消息。Host 读取 Runtime 配置，在事务中插入 Turn、用户原文、助手消息占位并更新会话状态，返回 HTTP 202。
+1. 客户端发送消息。Host 读取 Runtime 配置，在事务中插入 Turn、用户原文、助手消息占位并更新会话状态。事务提交后调用 `adapter.run` 启动后台执行，路由返回 HTTP 202。响应表示请求已受理，最终结果从快照读取。
 2. Host 把会话指令、工作区、本次消息和已有的 Runtime 线程 ID 交给 Adapter。每个 Turn 启动一个独立的 App Server；首轮创建线程，后续轮次恢复已有线程。Host 持久化返回的线程映射。Codex 使用自身的会话上下文。
 3. Adapter 将增量文本汇集为当前回复，Host 更新 SQLite 后通知客户端。工具结果与当前 Turn 关联。审批请求只存在于活动 run 中，刷新网页可通过快照读取仍有效的请求。
 4. 用户的同意或拒绝经 Host 送回同一会话的 Adapter，许可仅针对该次请求。Adapter 拒绝无法安全展示的请求。用户取消或超时会触发 Runtime 中断，网页断开只会移除 SSE 订阅。
@@ -80,7 +80,7 @@ Host 相对于启动工作目录解析 `data/`，也可由 `NEXUS_DATA_DIR` 覆�
 | POST | /sessions/:id/approvals/:approvalId | decision 可选 accept 或 decline。 |
 | GET | /events | EventSource 长连接与心跳。 |
 
-SSE 发送已经落库的变更通知，例如 `{"type":"session.changed","sessionId":"…"}`。同一资源的突发通知可合并，浏览器刷新对应的权威快照，按 sequence 展示同一条助手消息的最新正文。连接建立或恢复时主动查询；运行中工具及审批也通过快照恢复。随着聊天历史增长，整会话查询与逐次写入的成本会增加，可按实际规模引入分页和增量传输。
+SSE 通知浏览器哪些资源需要重新读取，例如 `{"type":"session.changed","sessionId":"…"}`。同一资源的突发通知可合并。浏览器在连接建立或恢复时查询快照，按 sequence 展示有序消息。快照包含 SQLite 中的正文和工具状态，以及当前活动任务内存中的待审批项。随着聊天历史增长，整会话查询与逐次写入的成本会增加，可按实际规模引入分页和增量传输。
 
 ## 配置生效时间
 
@@ -89,7 +89,7 @@ SSE 发送已经落库的变更通知，例如 `{"type":"session.changed","sessi
 | 日志等级 | 保存后立即应用。 |
 | 执行超时 | 新提交的 Turn 读取。 |
 | Host 默认 Runtime | 创建身份且省略 runtimeConfigId 时采用。 |
-| 人格、身份工作区、Runtime 绑定 | 新建会话时捕获。 |
+| 人格、身份工作区、Runtime 绑定 | 新建会话时捕获。默认工作区可随数据目录搬迁。 |
 | Runtime 默认工作区 | 新建会话时，身份工作区留空才继承。 |
 | Runtime 的启用、可执行文件、模型与代理 | 后续调用读取。已保存的代理用于专用登录、检测和 Turn；清空后沿用进程环境及支持的系统代理。活动 Turn 或检测期间改配返回 409。 |
 | 端口、数据目录 | 启动时从 NEXUS_PORT、NEXUS_DATA_DIR 读取。 |
@@ -99,3 +99,16 @@ SSE 发送已经落库的变更通知，例如 `{"type":"session.changed","sessi
 每个 Host 的 Codex 工厂绑定该数据目录的 `codex-home`。启动子进程时设置其私有 `CODEX_HOME`、SQLite 与日志位置，并在 RPC 握手后核对实际值。首次登录使用同一目录和代理的官方 CLI；切换前的线程映射从专用库恢复失败时向用户提示新建会话。日常 Codex 的旧列表保留原貌。详见 [原生线程存储决策](adr/003-private-codex-home.md)。
 
 Host 校验精确的 Host、Origin 和浏览器跨站请求标记；生产仅监听 `127.0.0.1`。开发模式额外识别固定的本机 Vite 来源。API 未开放通配 CORS。静态页面使用同源 CSP。Runtime 子进程以固定参数启动 App Server，认证由 Codex 管理。Host 没有 Shell HTTP 接口。单用户本机进程属于信任边界，远程客户端和设备认证属于后续版本。架构决策见 [Host 与 Adapter](adr/001-host-and-adapters.md) 和 [本地存储](adr/002-local-storage.md)。
+
+## 所有权与扩展边界
+
+| 概念 | V0.1 的所有者与生命周期 |
+| --- | --- |
+| Identity / Personality | Host 为身份生成 UUID。名称、描述、人格文本和单调递增的版本保存在身份记录；会话另存当时的组合指令。没有独立的人格版本表，两次编辑之间未创建会话的旧文本无法从版本号还原。 |
+| Session / 原生 Thread | Host 以平台 UUID 组织多轮消息，首次获得原生 ID 时保存映射。Codex 保存推理所用的原生上下文。平台可以展示历史；原生线程丢失时旧会话的下一轮会报告恢复失败。 |
+| Runtime / Model / Turn | 会话固定 Runtime 配置 ID。Adapter 每轮读取当前可执行文件和可选模型；留空时由 Codex 选择。Host 尚未记录每个 Turn 实际使用的模型或二进制版本。 |
+| Workspace / Policy | 多个身份可共享同一工作目录。原生沙箱与人工单次审批约束本轮操作。待审批请求在内存里，Host 尚无按身份分配的独立策略、预算或持久审批账本。 |
+
+`agent-core` 的事件已经隔离原生 RPC。当前生产工厂只分派 Codex，SQLite 只初始化一条 Runtime 配置，API 可编辑既有配置。接口声明的 resume、stream、cancel、approvals 四个能力标志尚未驱动 Host 调度或界面行为。现有注入工厂验证了同一调用方能用测试替身；能否接纳不同恢复或审批语义，需要第二个真实产品验证。
+
+长期由 Host 构建包含人格、记忆和策略的上下文；当前发送给 Adapter 的业务上下文只有会话指令、已有线程 ID 和本轮输入等。关系、记忆检索、事件调度、远端身份认证和跨 Agent 通信的目标见[愿景](vision.md)。落地顺序与尚待确认的决定见[路线图](roadmap.md)及[待讨论事项](architect/open-questions.md)。
