@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'vitest'
-import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { copyFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent } from '../packages/agent-core/src/index.js'
@@ -22,6 +23,24 @@ function input(message: string) { return { executable: process.execPath, workspa
 test('handshakes without exposing account properties', async () => {
   const result = await codexAdapter.checkAvailability(input(''))
   expect(result).toEqual({ available: true, version: '1.2.0', detail: 'Codex app-server is ready.' })
+})
+
+test('aborts a pending availability RPC and waits for the Codex process to exit', async () => {
+  const home = join(directory, 'pending-check')
+  const pidFile = join(home, 'pid')
+  const abort = new AbortController()
+  const result = createCodexAdapter(home).checkAvailability(input(''), abort.signal)
+  const checking = expect(result).rejects.toThrow('Check interrupted')
+  try {
+    await expect.poll(() => existsSync(pidFile)).toBe(true)
+    const pid = Number(await readFile(pidFile, 'utf8'))
+    abort.abort(new Error('Check interrupted'))
+    await checking
+    expect(() => process.kill(pid, 0)).toThrow(/ESRCH/)
+  } finally {
+    abort.abort(new Error('Check interrupted'))
+    await checking
+  }
 })
 
 test.each(['bad-home', 'bad-config'])('rejects storage mismatch from %s before starting a thread', async name => {

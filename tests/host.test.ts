@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -116,25 +116,54 @@ describe('local Host', () => {
   })
 
   it('persists editable configuration and checks the selected runtime', async () => {
-    const [config] = (await api('GET', '/runtimes')).json()
-    const check = await api('POST', '/runtimes/' + config.id + '/check')
+    const [config] = (await api('GET', '/manage/runtimes')).json()
+    const check = await api('POST', '/manage/runtimes/' + config.id + '/check')
     expect(check.statusCode, check.body).toBe(200)
     expect(check.json().available).toBe(true)
-    expect((await api('PATCH', '/host/config', { executionTimeoutSeconds: 90, logLevel: 'warn' })).statusCode).toBe(200)
+    expect((await api('PATCH', '/manage/host/config', { executionTimeoutSeconds: 90, logLevel: 'warn' })).statusCode).toBe(200)
     await app.close()
     app = await connect()
-    expect((await api('GET', '/host/config')).json()).toMatchObject({ executionTimeoutSeconds: 90, logLevel: 'warn' })
+    expect((await api('GET', '/manage/host/config')).json()).toMatchObject({ executionTimeoutSeconds: 90, logLevel: 'warn' })
+  })
+
+  it('exposes only runtime selection fields through the Client endpoint', async () => {
+    expect((await api('GET', '/runtime-options')).json()).toEqual([
+      { id: 'codex', type: 'codex', enabled: true, isDefault: true },
+    ])
+    expect((await api('PATCH', '/manage/runtimes/codex', { enabled: false, proxyUrl: 'http://localhost:7890' })).statusCode).toBe(200)
+    expect((await api('GET', '/runtime-options')).json()).toEqual([
+      { id: 'codex', type: 'codex', enabled: false, isDefault: true },
+    ])
+    for (const route of ['/host/status', '/host/config', '/runtimes']) {
+      expect((await api('GET', route)).statusCode).toBe(404)
+    }
+  })
+
+  it('serves the Console entry and gives missing Console files a 404', async () => {
+    const webDirectory = join(dataDirectory, 'web')
+    await mkdir(join(webDirectory, 'console'), {recursive: true})
+    await writeFile(join(webDirectory, 'index.html'), '<html><title>Client</title></html>')
+    await writeFile(join(webDirectory, 'console', 'index.html'), '<html><title>Console</title></html>')
+    await app.close()
+    app = await buildHost({dataDirectory, port: 8080, webDirectory})
+    const open = (url: string) => app.inject({url, headers: {...headers, accept: 'text/html'}})
+    expect((await open('/')).body).toContain('<title>Client</title>')
+    expect((await open('/console')).headers.location).toBe('/console/')
+    expect((await open('/console/?ref=test')).body).toContain('<title>Console</title>')
+    expect((await open('/console/missing')).statusCode).toBe(404)
+    await rm(join(webDirectory, 'console', 'index.html'))
+    expect((await open('/console/')).statusCode).toBe(404)
   })
 
   it('loads a legacy runtime, persists its proxy and passes the selection to checks and turns', async () => {
-    const route = '/runtimes/codex'
+    const route = '/manage/runtimes/codex'
     await app.close()
     const db = new DatabaseSync(join(dataDirectory, 'nexus.sqlite'))
     try {
       db.exec("UPDATE runtimes SET json=json_remove(json,'$.proxyUrl')")
     } finally { db.close() }
     app = await connect()
-    expect((await api('GET', '/runtimes')).json()[0].proxyUrl).toBe('')
+    expect((await api('GET', '/manage/runtimes')).json()[0].proxyUrl).toBe('')
     const proxyUrl = 'https://proxy.example.test:7443'
     expect((await api('PATCH', route, {proxyUrl})).json().proxyUrl).toBe(proxyUrl)
     await app.close()
@@ -154,7 +183,7 @@ describe('local Host', () => {
   })
 
   it('accepts proxy endpoints and rejects credentials or URL suffixes without echoing the input', async () => {
-    const route = '/runtimes/codex'
+    const route = '/manage/runtimes/codex'
     for (const proxyUrl of ['http://localhost:7890', 'http://192.168.1.8:9080/', 'https://[::1]']) {
       expect((await api('PATCH', route, {proxyUrl})).json().proxyUrl).toBe(proxyUrl)
     }
@@ -167,7 +196,7 @@ describe('local Host', () => {
       expect(response.statusCode).toBe(400)
       expect(response.body).not.toContain('private-marker')
     }
-    expect((await api('GET', '/runtimes')).json()[0].proxyUrl).toBe('https://[::1]')
+    expect((await api('GET', '/manage/runtimes')).json()[0].proxyUrl).toBe('https://[::1]')
   })
 
   it('rejects foreign hosts and origins and invalid timeout values', async () => {
@@ -175,11 +204,14 @@ describe('local Host', () => {
       { host: 'untrusted.invalid:8080' },
       { ...headers, origin: 'https://untrusted.invalid' },
       { ...headers, origin: 'null' },
+      { ...headers, 'sec-fetch-site': 'cross-site' },
     ]) {
-      const res = await app.inject({ method: 'PATCH', url: '/api/host/config', headers: badHeaders, payload: { logLevel: 'error' } })
-      expect(res.statusCode).toBeGreaterThanOrEqual(400)
-      expect(res.headers['access-control-allow-origin']).toBeUndefined()
+      const shutdown = await app.inject({ method: 'POST', url: '/api/manage/host/shutdown', headers: badHeaders, payload: {} })
+      expect(shutdown.statusCode).toBe(403)
+      expect(shutdown.headers['access-control-allow-origin']).toBeUndefined()
     }
-    expect((await api('PATCH', '/host/config', { executionTimeoutSeconds: -1 })).statusCode).toBe(400)
+    expect((await api('PATCH', '/manage/host/config', { executionTimeoutSeconds: -1 })).statusCode).toBe(400)
+    expect((await api('POST', '/manage/host/shutdown', { unexpected: true })).statusCode).toBe(400)
+    expect((await api('GET', '/manage/host/status')).statusCode).toBe(200)
   })
 })

@@ -54,12 +54,16 @@ try {
   await writeFile(join(workspace, 'fixture.js'), 'console.log("fixture-' + marker + '")\n')
   await start()
   const web = await fetch(base)
-  assert.ok(web.ok && (await web.text()).includes('<html'), 'built Web Client must be served')
-  const [runtime] = await request('/runtimes')
+  const webPage = await web.text()
+  assert.ok(web.ok && webPage.includes('<html'), 'built Web Client must be served')
+  const consoleResponse = await fetch(base + '/console/')
+  const consolePage = await consoleResponse.text()
+  assert.ok(consoleResponse.ok && consolePage.includes('<html') && consolePage !== webPage, 'built Console must be served')
+  const [runtime] = await request('/manage/runtimes')
   if (process.env.NEXUS_TEST_MODEL) {
-    await request('/runtimes/' + runtime.id, { model: process.env.NEXUS_TEST_MODEL }, 'PATCH')
+    await request('/manage/runtimes/' + runtime.id, { model: process.env.NEXUS_TEST_MODEL }, 'PATCH')
   }
-  const availability = await request('/runtimes/' + runtime.id + '/check', {})
+  const availability = await request('/manage/runtimes/' + runtime.id + '/check', {})
   assert.ok(availability.available, availability.detail)
   const identity = await request('/identities', {
     name: '验收助手', personality: 'Always include NEXUS-READY in your final response.', workspace,
@@ -104,6 +108,7 @@ try {
   const thread = snapshot.session.runtimeSessionId
   assert.ok(thread && thread !== sessionId)
   console.log('PASS real tool, personality, SSE disconnect, SQLite history')
+  await request('/manage/host/shutdown', {})
   await app.close()
   await start()
   await request(path + '/messages', { content: 'Without tools, repeat the exact output you reported in your previous answer.' })

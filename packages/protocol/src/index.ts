@@ -5,6 +5,8 @@ export interface HostConfig {
   defaultRuntimeId: string
 }
 export interface HostStatus {
+  service: 'namica-nexus'
+  instanceId: string
   version: string
   status: 'running'
   uptimeSeconds: number
@@ -12,6 +14,7 @@ export interface HostStatus {
   port: number
   dataDirectory: string
   logLevel: LogLevel
+  activeTurns: number
 }
 export interface Runtime {
   id: string
@@ -25,6 +28,9 @@ export interface Runtime {
   available: boolean | null
   detail: string
   processState: 'idle' | 'running'
+}
+export interface RuntimeOption extends Pick<Runtime, 'id' | 'type' | 'enabled'> {
+  isDefault: boolean
 }
 export interface Identity {
   id: string

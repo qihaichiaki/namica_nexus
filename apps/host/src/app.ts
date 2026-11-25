@@ -1,12 +1,13 @@
 import Fastify from 'fastify'
 import staticFiles from '@fastify/static'
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import type { ServerResponse } from 'node:http'
 import { isAbsolute, join, resolve } from 'node:path'
 import { z } from 'zod'
 import type { AgentAdapter } from '../../../packages/agent-core/src/index.js'
 import { createCodexAdapter } from '../../../packages/agent-codex/src/index.js'
-import type { HostEvent, HostStatus, Runtime } from '../../../packages/protocol/src/index.js'
+import type { HostEvent, HostStatus, Runtime, RuntimeOption } from '../../../packages/protocol/src/index.js'
 import { HttpError, Store } from './store.js'
 import { Tasks } from './tasks.js'
 import { codexHomeFor, resolveDataDirectory } from './paths.js'
@@ -32,6 +33,10 @@ const configPatch = z.strictObject({
   logLevel: z.enum(['debug','info','warn','error']),
   executionTimeoutSeconds: z.number().int().min(5).max(86400), defaultRuntimeId: requiredText(120),
 }).partial()
+const shutdownRequest = z.strictObject({
+  instanceId: z.string().optional(),
+  activeTurns: z.number().int().nonnegative().optional(),
+})
 
 export interface HostOptions {
   dataDirectory?: string
@@ -48,6 +53,7 @@ export async function buildHost(options: HostOptions = {}) {
   const app = Fastify({
     logger: {level: store.config().logLevel},
     bodyLimit: 1024 * 1024,
+    forceCloseConnections: true,
     logController: new Fastify.LogController({disableRequestLogging: true}),
   })
   const codexAdapter = createCodexAdapter(codexHomeFor(dataDirectory))
@@ -56,10 +62,14 @@ export async function buildHost(options: HostOptions = {}) {
     return codexAdapter
   })
   const bootTime = Date.now()
+  const instanceId = randomUUID()
   const clients = new Set<ServerResponse>()
   const pendingEvents = new Map<string, HostEvent>()
   let flushTimer: NodeJS.Timeout | undefined
   let closing = false
+  const assertOpen = () => {
+    if (closing) throw new HttpError(503, 'Host is shutting down.')
+  }
   function publish(event: HostEvent) {
     if (!clients.size || closing) return
     pendingEvents.set(event.type + (event.sessionId ?? ''), event)
@@ -76,6 +86,11 @@ export async function buildHost(options: HostOptions = {}) {
     }, 35)
   }
   const tasks = new Tasks(store, adapterFor, publish, app.log)
+  let stoppedTasks: Promise<void> | undefined
+  function stopTasks() {
+    closing = true
+    return stoppedTasks ??= tasks.stop().catch(error => app.log.error({err: error}, 'Unable to stop Host turns'))
+  }
   const port = () => {
     const listening = app.server.address()
     return listening && typeof listening === 'object' ? listening.port : configuredPort
@@ -89,11 +104,16 @@ export async function buildHost(options: HostOptions = {}) {
     const devRequest = options.dev && origin !== undefined && devOrigins.includes(origin)
     if ((origin !== undefined && origin !== 'http://' + host && !devRequest) ||
         (request.headers['sec-fetch-site'] === 'cross-site' && !devRequest)) throw new HttpError(403, 'Unrecognized Origin.')
-    if (closing) throw new HttpError(503, 'Host is shutting down.')
+    assertOpen()
     reply.header('X-Content-Type-Options', 'nosniff')
     reply.header('Referrer-Policy', 'no-referrer')
     reply.header('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
     if (request.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store')
+  })
+  // A request may have entered before shutdown and still be receiving its body.
+  app.addHook('preHandler', (_request, _reply, done) => {
+    assertOpen()
+    done()
   })
   app.setErrorHandler((error: Error & {statusCode?: number}, _request, reply) => {
     if (error instanceof z.ZodError) return reply.code(400).send({error: error.issues.map(i => i.path.join('.') + ' ' + i.message).join(', ')})
@@ -102,39 +122,63 @@ export async function buildHost(options: HostOptions = {}) {
     return reply.code(status).send({error: status >= 500 ? 'Host request failed.' : error.message})
   })
 
-  app.get('/api/host/status', (): HostStatus => ({
+  app.get('/api/manage/host/status', (): HostStatus => ({
+    service: 'namica-nexus', instanceId, activeTurns: tasks.activeTurns,
     version: '0.1.0', status: 'running', uptimeSeconds: Math.floor((Date.now()-bootTime)/1000),
     address: '127.0.0.1', port: port(), dataDirectory, logLevel: store.config().logLevel,
   }))
-  app.get('/api/host/config', () => store.config())
-  app.patch('/api/host/config', req => {
+  app.get('/api/manage/host/config', () => store.config())
+  app.patch('/api/manage/host/config', req => {
     const config = store.saveConfig({...store.config(), ...configPatch.parse(req.body)})
     app.log.level = config.logLevel
     publish({type: 'config.changed'})
     return config
   })
+  app.post('/api/manage/host/shutdown', (req, reply) => {
+    const expected = shutdownRequest.parse(req.body)
+    if (expected.instanceId !== undefined && expected.instanceId !== instanceId) throw new HttpError(409, 'Host instance changed.')
+    if (expected.activeTurns !== undefined && expected.activeTurns !== tasks.activeTurns) throw new HttpError(409, 'Active turn count changed.')
+    // Close after the response is written or its connection is lost.
+    reply.raw.once('close', () => {
+      void app.close().catch(error => app.log.error({err: error}, 'Host shutdown failed'))
+    })
+    void stopTasks()
+    return reply.code(202).send({ok: true})
+  })
 
   type IdRoute = { Params: {id: string} }
-  const checks = new Set<string>()
-  app.get('/api/runtimes', () => store.runtimes().map(r => tasks.runtimeState(r)))
-  app.patch<IdRoute>('/api/runtimes/:id', req => {
+  const checkShutdown = new AbortController()
+  const checks = new Map<string, Promise<Runtime>>()
+  app.get('/api/runtime-options', (): RuntimeOption[] => {
+    const { defaultRuntimeId } = store.config()
+    return store.runtimes().map(({id, type, enabled}) => ({id, type, enabled, isDefault: id === defaultRuntimeId}))
+  })
+  app.get('/api/manage/runtimes', () => store.runtimes().map(r => tasks.runtimeState(r)))
+  app.patch<IdRoute>('/api/manage/runtimes/:id', req => {
     const runtime = tasks.runtimeState(store.runtime(req.params.id))
     if (checks.has(runtime.id) || runtime.processState === 'running') throw new HttpError(409, 'Runtime is busy.')
     const result = store.saveRuntime({...runtime, ...runtimePatch.parse(req.body), version: null, available: null, detail: ''})
     publish({type: 'runtimes.changed'})
     return result
   })
-  app.post<IdRoute>('/api/runtimes/:id/check', async req => {
-    const runtime = store.runtime(req.params.id)
-    if (checks.has(runtime.id)) throw new HttpError(409, 'Check already in progress.')
-    checks.add(runtime.id)
+  async function checkRuntime(runtime: Runtime) {
+    let result: Pick<Runtime, 'available' | 'version' | 'detail'>
     try {
       mkdirSync(runtime.workspace, {recursive: true})
-      const result = await adapterFor(runtime).checkAvailability(runtime)
-      return tasks.runtimeState(store.saveRuntime({...runtime, ...result}))
+      result = await adapterFor(runtime).checkAvailability(runtime, checkShutdown.signal)
     } catch (err) {
-      return tasks.runtimeState(store.saveRuntime({...runtime, available: false, version: null,
-        detail: err instanceof Error ? err.message : 'Check failed.'}))
+      result = {available: false, version: null, detail: err instanceof Error ? err.message : 'Check failed.'}
+    }
+    assertOpen()
+    return tasks.runtimeState(store.saveRuntime({...runtime, ...result}))
+  }
+  app.post<IdRoute>('/api/manage/runtimes/:id/check', async req => {
+    const runtime = store.runtime(req.params.id)
+    if (checks.has(runtime.id)) throw new HttpError(409, 'Check already in progress.')
+    const result = checkRuntime(runtime)
+    checks.set(runtime.id, result)
+    try {
+      return await result
     } finally { checks.delete(runtime.id); publish({type: 'runtimes.changed'}) }
   })
 
@@ -188,18 +232,24 @@ export async function buildHost(options: HostOptions = {}) {
   })
   const webDirectory = resolve(options.webDirectory ?? 'apps/web/dist')
   if (existsSync(join(webDirectory, 'index.html'))) {
-    await app.register(staticFiles, {root: webDirectory})
+    app.register(staticFiles, {root: webDirectory})
+    app.get('/console', (_req, reply) => reply.redirect('/console/'))
+    app.get('/console/', (_req, reply) => reply.sendFile('console/index.html'))
     app.setNotFoundHandler((req, reply) => {
-      if (req.method === 'GET' && !req.url.startsWith('/api/') && req.headers.accept?.includes('text/html'))
+      const [pathname] = req.url.split('?', 1)
+      if (req.method === 'GET' && !pathname.startsWith('/api/') &&
+          pathname !== '/console' && !pathname.startsWith('/console/') && req.headers.accept?.includes('text/html'))
         return reply.sendFile('index.html')
       return reply.code(404).send({error: 'Resource not found.'})
     })
   }
   app.addHook('preClose', async () => {
-    closing = true
+    const stopped = stopTasks()
     clearTimeout(flushTimer)
+    pendingEvents.clear()
     for (const client of clients) client.end()
-    await tasks.stop()
+    checkShutdown.abort()
+    await Promise.allSettled([stopped, ...checks.values()])
   })
   app.addHook('onClose', async () => store.close())
   return app
