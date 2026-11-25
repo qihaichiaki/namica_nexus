@@ -115,4 +115,4 @@ Host 校验精确的 Host、Origin 和浏览器跨站请求标记；生产仅监
 
 ## 已确认的下一项变更
 
-Windows 本地启动入口将负责托盘与打开现有 Web Client，Host 将统一处理托盘和管理页的关停请求。当前实现仍从终端启动。决定及验收范围见 [ADR 004](adr/004-windows-launch-and-shutdown.md) 和 [TASK-001](tasks/TASK-001-windows-launch-and-shutdown.md)。
+Windows 本机 EXE 将启动 Host 并显示本实例的原生控制台，托盘可唤回窗口；打开 Web Client 必须由用户主动触发，Host 将统一处理托盘和管理页的关停请求。当前实现仍从终端启动。决定及验收范围见 [ADR 004](adr/004-windows-launch-and-shutdown.md) 和 [TASK-001](tasks/TASK-001-windows-launch-and-shutdown.md)。
