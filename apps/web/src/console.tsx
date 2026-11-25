@@ -7,7 +7,7 @@ import { deploymentPath, formatListener, readConsoleResource, readHostStatus, re
 import type { Deployment } from './console-data'
 import { DeploymentSection } from './console-deployment'
 import { CodexAuth, HostLogs } from './console-operations'
-import { consoleUrl, readRestartResult, rememberRestart, restartExpired, restoreRestart } from './console-restart'
+import { clearRestartNavigation, consoleUrl, readRestartResult, rememberRestart, restartExpired, restartNavigationUrl, restoreRestart } from './console-restart'
 import type { RestartAttempt } from './console-restart'
 import { HostForm, RuntimeForm, SettingsSection } from './console-settings'
 import { Brand, Modal, Notice } from './ui'
@@ -109,6 +109,7 @@ function Console() {
   const serviceLabel = restart ? '正在重启 Host…' : stopped ? '关停请求已受理' : running ? '运行中' :
     status.error ? status.data ? '连接中断' : '无法连接 Host' : '正在连接 Host…'
 
+  useEffect(clearRestartNavigation, [])
   useEffect(() => {
     const interval = window.setInterval(status.refresh, pollInterval)
     window.addEventListener('online', status.refresh)
@@ -130,9 +131,10 @@ function Console() {
     const check = async () => {
       const outcome = await readRestartResult(restart)
       if (stopped) return
-      if (outcome?.status === 'ready' && consoleUrl(outcome.consoleUrl)?.origin !== location.origin) {
+      const destination = restartNavigationUrl(restart)
+      if (outcome?.status === 'ready' && destination && consoleUrl(outcome.consoleUrl)?.origin !== location.origin) {
         rememberRestart()
-        location.replace(outcome.consoleUrl)
+        location.replace(destination)
         return
       }
       if (outcome || restartExpired(restart)) {
@@ -141,7 +143,7 @@ function Console() {
             '新设置启动失败，Host 已在原地址恢复。可在启动设置查看原因并修改后重试。' :
             '仍未确认 Host 的启动结果。请刷新原地址，或尝试打开目标 Console。'),
           error: true,
-          target: outcome ? undefined : restart.consoleUrl,
+          target: outcome ? undefined : destination,
         })
         rememberRestart()
         setRestart(undefined)
@@ -240,7 +242,7 @@ function Console() {
         {restart && <div className="console-feedback" role="status">
           <p>{restartDelayed ? 'Host 仍未报告启动结果，页面会继续检查。' : '正在等待启动结果。就绪后会连接到新的 Host。'}</p>
           <p>目标 Console <code>{restart.consoleUrl}</code></p>
-          {restartDelayed && <a href={restart.consoleUrl} target="_blank" rel="noopener">在新标签页尝试打开目标 Console</a>}
+          {restartDelayed && <a href={restartNavigationUrl(restart)} target="_blank" rel="noopener">在新标签页尝试打开目标 Console</a>}
         </div>}
         {stopped && <p className="console-feedback">双击 Namica Nexus 可重新启动服务，此页面会自动连接。</p>}
         {!stopped && !restart && status.error && <p className="console-feedback">{status.error} 页面会自动重试连接。</p>}

@@ -25,6 +25,20 @@ export function consoleUrl(value: string) {
   }
 }
 
+export function restartNavigationUrl(attempt: RestartAttempt) {
+  const url = consoleUrl(attempt.consoleUrl)
+  if (!url) return
+  if (url.origin !== location.origin) url.searchParams.set('restart', attempt.restartId)
+  return url.href
+}
+
+export function clearRestartNavigation() {
+  const url = new URL(location.href)
+  if (!url.searchParams.has('restart')) return
+  url.searchParams.delete('restart')
+  history.replaceState(history.state, '', url.pathname + url.search + url.hash)
+}
+
 export function restoreRestart(): RestartAttempt | undefined {
   if (!location.hash.startsWith(restartFragment)) return
   try {
