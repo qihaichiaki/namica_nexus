@@ -1,6 +1,6 @@
-﻿import { useId } from 'react'
+﻿import { useEffect, useId, useRef } from 'react'
 import type { ReactNode } from 'react'
-import { CheckCircle2, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, TriangleAlert, X } from 'lucide-react'
 import type { Action, Session } from './data'
 
 export function Brand({ large = false }: { large?: boolean }) {
@@ -16,6 +16,15 @@ export function Avatar({ seed, large = false }: { seed: string; large?: boolean 
     return <i key={i} className={(hash >>> bit) % 2 ? 'lit' : ''} />
   })
   return <span aria-hidden="true" className={'avatar tone-' + (Math.abs(hash) % 4) + (large ? ' large' : '')}>{shape}</span>
+}
+
+export function Modal({ title, children, close, pending = false }: { title: string; children: ReactNode; close: () => void; pending?: boolean }) {
+  const id = useId()
+  const dialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => { dialog.current?.showModal() }, [])
+  return <dialog className="modal" ref={dialog} aria-labelledby={id} onCancel={e => { e.preventDefault(); if (!pending) close() }}>
+    <div className="modal-head"><h2 id={id}>{title}</h2><button className="icon-button" aria-label="关闭" disabled={pending} onClick={close}><X size={19}/></button></div>{children}
+  </dialog>
 }
 
 export function Field({ title, hint, children }: { title: string; hint?: string; children: (id: string) => ReactNode }) {

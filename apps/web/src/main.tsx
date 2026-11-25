@@ -1,23 +1,22 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { AudioLines, Blocks, Cable, MessageSquare, PanelLeftOpen, Settings2, X } from 'lucide-react'
+import { AudioLines, Blocks, Cable, MessageSquare, PanelLeftOpen, X } from 'lucide-react'
 import { api, useAction, useResource } from './data'
-import type { HostConfig, HostEvent, HostStatus, Identity, Runtime, Session, SessionSnapshot } from './data'
+import type { ClientRuntimeOption, HostEvent, Identity, Session, SessionSnapshot } from './data'
 import { Brand, Notice } from './ui'
 import { Chat, Sidebar } from './chat'
-import { Agents, Settings } from './manage'
+import { Agents } from './agents'
+import './shared.css'
 import './style.css'
 
-type Page = 'chat' | 'agents' | 'settings'
+type Page = 'chat' | 'agents'
 const pages = [
   { id: 'chat', label: '对话', icon: MessageSquare },
   { id: 'agents', label: '身份', icon: Blocks },
-  { id: 'settings', label: '设置', icon: Settings2 },
 ] as const
 
 function currentPage(): Page {
-  const fragment = location.hash.slice(1)
-  return fragment === 'agents' || fragment === 'settings' ? fragment : 'chat'
+  return location.hash === '#agents' ? 'agents' : 'chat'
 }
 
 function App() {
@@ -31,9 +30,7 @@ function App() {
   const [createAgent, setCreateAgent] = useState(false)
   const identities = useResource<Identity[]>('/identities')
   const sessions = useResource<Session[]>('/sessions')
-  const runtimes = useResource<Runtime[]>('/runtimes')
-  const status = useResource<HostStatus>('/host/status')
-  const config = useResource<HostConfig>('/host/config')
+  const runtimes = useResource<ClientRuntimeOption[]>('/runtime-options')
   const identity = identities.data?.find(item => item.id === identityId) ?? identities.data?.[0]
   const list = (sessions.data ?? []).filter(item => item.identityId === identity?.id)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -66,7 +63,7 @@ function App() {
   const callbacks = useRef({ open: () => {}, event: (_event: HostEvent) => {} })
   callbacks.current = {
     open() {
-      identities.refresh(); sessions.refresh(); runtimes.refresh(); config.refresh(); status.refresh(); snapshot.refresh()
+      identities.refresh(); sessions.refresh(); runtimes.refresh(); snapshot.refresh()
     },
     event(event) {
       switch (event.type) {
@@ -75,8 +72,8 @@ function App() {
           if (event.sessionId === selected?.sessionId) snapshot.refresh()
           break
         case 'identities.changed': identities.refresh(); break
-        case 'runtimes.changed': runtimes.refresh(); break
-        case 'config.changed': config.refresh(); status.refresh(); break
+        case 'runtimes.changed':
+        case 'config.changed': runtimes.refresh(); break
       }
     },
   }
@@ -90,12 +87,6 @@ function App() {
     }
     return () => feed.close()
   }, [])
-  useEffect(() => {
-    if (page !== 'settings') return
-    status.refresh()
-    const interval = window.setInterval(status.refresh, 10000)
-    return () => clearInterval(interval)
-  }, [page, status.refresh])
   const openPage = (target: Page) => { location.hash = target; setPage(target); setDrawer(false) }
   const select = (next: Session) => {
     setSelectedSessions(previous => ({ ...previous, [next.identityId]: next.sessionId }))
@@ -109,7 +100,7 @@ function App() {
     return next
   }
   const onCreate = () => { setCreateAgent(true); openPage('agents') }
-  const error = identities.error || sessions.error || runtimes.error || status.error || config.error || snapshot.error
+  const error = identities.error || sessions.error || runtimes.error || snapshot.error
   return <div className="app">
     <header className="appbar">
       <a href="#chat" className="wordmark" aria-label="Namica Nexus 对话"><Brand /><span>Namica <strong>Nexus</strong></span></a>
@@ -123,7 +114,7 @@ function App() {
       <aside className={'chat-sidebar ' + (drawer ? 'open' : '')}>
         <button aria-label="关闭会话列表" className="mobile-close icon-button" onClick={() => setDrawer(false)}><X size={17} /></button>
         <Sidebar identities={identities.data ?? []} identity={identity} sessions={list} selected={selected}
-          runtime={runtimes.data?.find(r => r.id === identity?.runtimeConfigId)} version={status.data?.version}
+          runtime={runtimes.data?.find(r => r.id === identity?.runtimeConfigId)}
           selectIdentity={setIdentityId} selectSession={select} onCreate={onCreate} newSession={() => action.perform(async () => { await startSession() })} pending={action.pending} />
       </aside>
       <main className="chat-pane">
@@ -135,14 +126,12 @@ function App() {
         <Chat key={selected?.sessionId ?? identity?.id ?? 'welcome'} identity={identity} selected={selected} snapshot={snapshot.data}
           loading={!identities.data || !sessions.data || Boolean(selected && !snapshot.data)} loadFailed={Boolean(identities.error || sessions.error || snapshot.error)}
           connection={connection} startSession={startSession} refresh={() => { sessions.refresh(); snapshot.refresh() }}
-          onCreate={onCreate} onSettings={() => openPage('settings')} />
+          onCreate={onCreate} />
       </main>
-    </div> : page === 'agents' ?
-      <Agents identities={identities.data} sessions={sessions.data ?? []} runtimes={runtimes.data ?? []} config={config.data}
+    </div> :
+      <Agents identities={identities.data} sessions={sessions.data ?? []} runtimes={runtimes.data ?? []}
         newRequested={createAgent} clearRequest={() => setCreateAgent(false)} refresh={identities.refresh}
-        chat={id => { setIdentityId(id); openPage('chat') }} /> :
-      <Settings status={status.data} config={config.data} runtimes={runtimes.data ?? []}
-        refresh={() => { status.refresh(); config.refresh(); runtimes.refresh() }} />}
+        chat={id => { setIdentityId(id); openPage('chat') }} />}
   </div>
 }
 
