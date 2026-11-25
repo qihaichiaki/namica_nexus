@@ -1,6 +1,8 @@
-﻿import { defineConfig } from 'vite'
+import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath } from 'node:url'
+
+import { consoleUrl, deploymentProfile } from '../host/src/deployment.js'
 
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
@@ -19,7 +21,10 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:' + (process.env.NEXUS_PORT || '8080'),
+        target: 'http://127.0.0.1:8080',
+        bypass(_req, _res, options) {
+          options.target = new URL(consoleUrl(deploymentProfile().read().active)).origin
+        },
         changeOrigin: true,
       },
     },
