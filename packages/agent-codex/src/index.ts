@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { AgentAdapter, AgentEvent, AgentInput, AgentOptions, AgentRun } from '../../agent-core/src/index.js'
 import { fields, Rpc, stringValue, summary, type Fields } from './rpc.js'
 import { codexEnvironment } from './home.js'
+import { resolveCodexExecutable } from './executable.js'
 
 type Outcome = 'completed' | 'cancelled'
 type RequestId = string | number
@@ -74,6 +75,7 @@ class CodexTurn implements AgentRun {
   private turnId = ''
   private dispatching = false
   private ended = false
+  private readonly startup = new AbortController()
   private cancelling = false
   private cancelTimer?: NodeJS.Timeout
   private interruptRetry?: NodeJS.Timeout
@@ -88,8 +90,9 @@ class CodexTurn implements AgentRun {
 
   private async start(input: AgentInput) {
     const env = await codexEnvironment(this.home, input.proxyUrl, input.workspace)
+    const executable = await resolveCodexExecutable(input.executable, this.startup.signal)
     if (this.ended) return
-    this.rpc = new Rpc(input, env, message => this.receive(message), error => this.finish(error))
+    this.rpc = new Rpc(executable, input.workspace, env, message => this.receive(message), error => this.finish(error))
     await this.rpc.initialize()
     if (!await authenticated(this.rpc)) throw new Error(loginHint)
     const params: Fields = {
@@ -230,6 +233,7 @@ class CodexTurn implements AgentRun {
   private finish(outcome: Outcome | Error) {
     if (this.ended) return
     this.ended = true
+    this.startup.abort()
     clearTimeout(this.cancelTimer)
     clearTimeout(this.interruptRetry)
     this.rpc?.close()
@@ -251,8 +255,9 @@ async function checkAvailability(options: AgentOptions, home: string, signal?: A
   try {
     signal?.throwIfAborted()
     const env = await codexEnvironment(home, options.proxyUrl, options.workspace)
+    const executable = await resolveCodexExecutable(options.executable, signal)
     signal?.throwIfAborted()
-    rpc = new Rpc(options, env, message => {
+    rpc = new Rpc(executable, options.workspace, env, message => {
       if (rpc && (typeof message.id === 'string' || typeof message.id === 'number')) deny(rpc, message.method, message.id)
     }, () => {})
     signal?.addEventListener('abort', close, { once: true })

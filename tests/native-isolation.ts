@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { createCodexAdapter } from '../packages/agent-codex/src/index.js'
+import { resolveCodexExecutable } from '../packages/agent-codex/src/executable.js'
 import { codexStorageArgs } from '../packages/agent-codex/src/home.js'
 
 const dir = await mkdtemp(join(tmpdir(), 'nexus-isolation-'))
@@ -46,7 +47,7 @@ const model = createServer(async (req, res) => {
 async function listed(target: string, privateHome?: string) {
   const env = privateHome ? { ...process.env, CODEX_HOME: privateHome, CODEX_SQLITE_HOME: privateHome } : process.env
   const args = privateHome ? ['app-server', ...codexStorageArgs(privateHome)] : ['app-server']
-  const child = spawn(executable, args, { cwd: workspace, windowsHide: true, env, stdio: 'pipe' })
+  const child = spawn(await resolveCodexExecutable(executable), args, { cwd: workspace, windowsHide: true, env, stdio: 'pipe' })
   child.stderr.resume()
   const lines = createInterface({input: child.stdout})
   const timer = setTimeout(() => child.kill(), 30_000)

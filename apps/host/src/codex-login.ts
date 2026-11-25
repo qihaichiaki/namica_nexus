@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { codexEnvironment, codexStorageArgs } from '../../../packages/agent-codex/src/home.js'
-import { resolveCodexExecutable } from '../../../packages/agent-codex/src/rpc.js'
+import { resolveCodexExecutable } from '../../../packages/agent-codex/src/executable.js'
 import type { HostStatus, Runtime } from '../../../packages/protocol/src/index.js'
 import { codexHomeFor, resolveDataDirectory } from './paths.js'
 
@@ -50,7 +50,8 @@ async function main() {
   const env = await codexEnvironment(codexHomeFor(directory), runtime.proxyUrl)
   const privateHome = env.CODEX_HOME!
   console.log('Nexus Codex 目录：' + privateHome)
-  const child = spawn(resolveCodexExecutable(runtime.executable), [...codexStorageArgs(privateHome), 'login', ...args], {
+  const executable = await resolveCodexExecutable(runtime.executable)
+  const child = spawn(executable, [...codexStorageArgs(privateHome), 'login', ...args], {
     env, cwd: directory, stdio: 'inherit', shell: false, windowsHide: true,
   })
   process.exitCode = await new Promise<number>((resolve, reject) => {

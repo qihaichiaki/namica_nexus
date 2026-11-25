@@ -44,7 +44,7 @@ export function RuntimeForm({ runtime, refresh }: { runtime: Runtime; refresh: (
     <div className="runtime-summary"><div className="runtime-glyph"><Terminal size={21}/></div><div><strong>{runtime.type}</strong><small>{runtime.version || '版本待检测'} · {runtime.processState === 'running' ? '进程运行中' : '进程空闲'}</small></div>
       <label className="switch"><input type="checkbox" name="enabled" defaultChecked={runtime.enabled}/><span/>启用</label></div>
     <div className="field-grid two">
-      <Field title="可执行文件">{id => <input className="mono-input" id={id} required name="executable" defaultValue={runtime.executable}/>}</Field>
+      <Field title="可执行文件" hint="保留 codex 即可自动查找。Windows 会先查 PATH，再查已安装的 Codex 桌面版。也可填写完整路径。">{id => <input className="mono-input" id={id} required name="executable" defaultValue={runtime.executable}/>}</Field>
       <Field title="默认模型">{id => <input className="mono-input" id={id} name="model" defaultValue={runtime.model} placeholder="跟随 Runtime 默认模型"/>}</Field>
     </div>
     <div className="field-grid two">
