@@ -23,7 +23,7 @@ export function Modal({ title, children, close, pending = false }: { title: stri
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => { dialog.current?.showModal() }, [])
   return <dialog className="modal" ref={dialog} aria-labelledby={id} onCancel={e => { e.preventDefault(); if (!pending) close() }}>
-    <div className="modal-head"><h2 id={id}>{title}</h2><button className="icon-button" aria-label="关闭" disabled={pending} onClick={close}><X size={19}/></button></div>{children}
+    <div className="modal-head"><h2 id={id}>{title}</h2><button type="button" className="icon-button" aria-label="关闭" disabled={pending} onClick={close}><X size={19}/></button></div>{children}
   </dialog>
 }
 
