@@ -31,6 +31,6 @@ export interface AgentRun {
 export interface AgentAdapter {
   type: string
   capabilities: { resume: boolean; stream: boolean; cancel: boolean; approvals: boolean }
-  checkAvailability(options: AgentOptions): Promise<{ available: boolean; version: string | null; detail: string }>
+  checkAvailability(options: AgentOptions, signal?: AbortSignal): Promise<{ available: boolean; version: string | null; detail: string }>
   run(input: AgentInput, publish: (event: AgentEvent) => void): AgentRun
 }

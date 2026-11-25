@@ -244,20 +244,27 @@ class CodexTurn implements AgentRun {
   }
 }
 
-async function checkAvailability(options: AgentOptions, home: string) {
+async function checkAvailability(options: AgentOptions, home: string, signal?: AbortSignal) {
   let rpc: Rpc | undefined
   let version: string | null = null
+  const close = () => rpc?.close()
   try {
-    rpc = new Rpc(options, await codexEnvironment(home, options.proxyUrl, options.workspace), message => {
+    signal?.throwIfAborted()
+    const env = await codexEnvironment(home, options.proxyUrl, options.workspace)
+    signal?.throwIfAborted()
+    rpc = new Rpc(options, env, message => {
       if (rpc && (typeof message.id === 'string' || typeof message.id === 'number')) deny(rpc, message.method, message.id)
     }, () => {})
+    signal?.addEventListener('abort', close, { once: true })
     version = await rpc.initialize()
     if (!await authenticated(rpc)) return { available: false, version, detail: loginHint }
     return { available: true, version, detail: 'Codex app-server is ready.' }
   } catch (error) {
+    signal?.throwIfAborted()
     return { available: false, version, detail: summary(error instanceof Error ? error.message : 'Codex unavailable') }
   } finally {
-    rpc?.close()
+    signal?.removeEventListener('abort', close)
+    close()
     await rpc?.exited
   }
 }
@@ -266,7 +273,7 @@ export function createCodexAdapter(privateHome: string): AgentAdapter {
   return {
     type: 'codex',
     capabilities: { resume: true, stream: true, cancel: true, approvals: true },
-    checkAvailability: options => checkAvailability(options, privateHome),
+    checkAvailability: (options, signal) => checkAvailability(options, privateHome, signal),
     run: (input, publish) => new CodexTurn(input, publish, privateHome)
   }
 }

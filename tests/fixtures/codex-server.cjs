@@ -12,6 +12,10 @@ createInterface({ input: process.stdin }).on('line', line => {
   const respond = output => send({ id, result: output })
   const path = require('node:path')
   if (method === 'initialize') {
+    if (path.basename(process.env.CODEX_HOME) === 'pending-check') {
+      require('node:fs').writeFileSync(path.join(process.env.CODEX_HOME, 'pid'), String(process.pid))
+      return
+    }
     const home = path.basename(process.env.CODEX_HOME) === 'bad-home' ? process.cwd() : process.env.CODEX_HOME
     respond({ userAgent: 'codex/1.2.0', codexHome: home })
   } else if (method === 'config/read') {

@@ -26,13 +26,14 @@ async function readLoginConfig(directory: string): Promise<LoginConfig> {
 
   // A running Host holds an exclusive lock. Consult that same instance through its API.
   const port = Number(process.env.NEXUS_PORT || 8080)
-  const base = 'http://127.0.0.1:' + port + '/api/'
+  const base = 'http://127.0.0.1:' + port + '/api/manage/'
   async function get<T>(endpoint: string): Promise<T> {
     const res = await fetch(base + endpoint, { redirect: 'error', signal: AbortSignal.timeout(3000) })
     if (!res.ok) throw new Error('Host returned HTTP ' + res.status)
     return res.json() as Promise<T>
   }
   const status = await get<HostStatus>('host/status')
+  if (status.service !== 'namica-nexus' || status.port !== port) throw new Error('当前端口没有预期的 Namica Nexus Host。')
   if (relative(directory, status.dataDirectory)) throw new Error('当前端口的 Host 使用另一数据目录，请核对 NEXUS_PORT 和 NEXUS_DATA_DIR。')
   const runtime = (await get<Runtime[]>('runtimes')).find(runtime => runtime.id === 'codex' && runtime.type === 'codex')
   if (!runtime) throw new Error('当前 Host 没有 Codex Runtime 配置。')

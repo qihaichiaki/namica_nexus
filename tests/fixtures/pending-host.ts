@@ -1,3 +1,4 @@
+import { once } from 'node:events'
 import { buildHost } from '../../apps/host/src/app.js'
 import type { AgentAdapter } from '../../packages/agent-core/src/index.js'
 
@@ -5,7 +6,14 @@ import type { AgentAdapter } from '../../packages/agent-core/src/index.js'
 const adapter: AgentAdapter = {
   type: 'test',
   capabilities: { resume: true, stream: true, cancel: true, approvals: true },
-  async checkAvailability() { return {available: true, version: 'test', detail: 'ready'} },
+  async checkAvailability(_options, signal) {
+    process.send?.('check-started')
+    await once(signal!, 'abort')
+    const release = once(process, 'message')
+    process.send?.('check-aborted')
+    await release
+    return {available: false, version: null, detail: 'stopped'}
+  },
   run(_input, publish) {
     let finish!: (status: 'completed' | 'cancelled') => void
     const done = new Promise<'completed' | 'cancelled'>(resolve => { finish = resolve })
@@ -16,7 +24,10 @@ const adapter: AgentAdapter = {
     publish({type: 'approval.requested', approvalId, label: 'Read fixture?'})
     return {
       done,
-      cancel() { finish('cancelled') },
+      cancel() {
+        publish({type: 'tool.completed', itemId: 'fixture-tool', label: 'Read fixture', failed: true})
+        finish('cancelled')
+      },
       respondApproval(id, allow) {
         if (id !== approvalId) return false
         publish({type: 'approval.resolved', approvalId})
@@ -31,5 +42,5 @@ const adapter: AgentAdapter = {
 }
 
 const host = await buildHost({ dataDirectory: process.argv[2], port: 0, adapterFactory: () => adapter })
-const address = await host.listen({port: 0, host: '127.0.0.1'})
+const address = await host.listen({port: Number(process.argv[3]), host: '127.0.0.1'})
 process.send?.(address)

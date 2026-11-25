@@ -24,6 +24,8 @@ export class Tasks {
     private log: FastifyBaseLogger,
   ) {}
 
+  get activeTurns() { return this.active.size }
+
   runtimeState(runtime: Runtime): Runtime {
     const running = [...this.active.values()].some(task => task.runtimeId === runtime.id)
     return { ...runtime, processState: running ? 'running' : 'idle' }
@@ -73,6 +75,7 @@ export class Tasks {
   private receive(task: ActiveTurn, event: AgentEvent) {
     const {turnId, sessionId} = task.turn
     if (this.active.get(sessionId) !== task) return
+    if (task.stopping === 'shutdown' && event.type !== 'session.ready' && event.type !== 'message.updated') return
     switch (event.type) {
       case 'session.ready':
         this.store.mapSession(sessionId, event.runtimeSessionId)
@@ -122,6 +125,7 @@ export class Tasks {
     const tasks = [...this.active.values()]
     for (const task of tasks) {
       task.stopping = 'shutdown'
+      task.approvals.clear()
       clearTimeout(task.timeout)
       task.handle?.cancel()
     }
